@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Воронка — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --coal:#141414; --paper:#F7F6F2; --yellow:#FFD400; --blue:#2456D6;
+    --grey:#8A8A84; --line:#E3E1DA; --card:#FFFFFF; --green:#2E7D46; --red:#B33A2B;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--coal);min-height:100vh}
+  header{background:var(--coal);color:#fff;padding:20px 24px;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  header h1{font-size:17px;font-weight:600}
+  header h1 span{color:var(--yellow)}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
+
+  .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+  .tabs button{font-size:13px;font-weight:600;background:transparent;border:1px solid var(--line);border-radius:20px;padding:6px 16px;cursor:pointer;color:var(--coal)}
+  .tabs button.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+  .seg{display:flex;gap:8px;margin-bottom:20px}
+  .seg button{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 14px;cursor:pointer;color:var(--coal)}
+  .seg button.active{background:var(--coal);color:var(--yellow);border-color:var(--coal)}
+
+  .hint{font-size:12px;color:var(--grey);margin-bottom:14px}
+
+  .funnel{display:flex;flex-direction:column;gap:6px;margin-bottom:24px}
+  .stage{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+  .stage input{width:16px;height:16px;cursor:pointer;flex:none}
+  .stage .name{flex:1;font-size:14px}
+  .stage .bar-wrap{flex:2;background:#EEE;border-radius:4px;height:22px;position:relative;overflow:hidden}
+  .stage .bar{height:100%;background:var(--blue);border-radius:4px}
+  .stage .cnt{font-family:'IBM Plex Mono',monospace;font-weight:600;width:60px;text-align:right}
+  .stage.win{border-color:var(--green);background:#F1F8F3}
+  .stage.win .bar{background:var(--green)}
+
+  .summary{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+  .summary .item .label{font-size:12px;color:var(--grey);margin-bottom:4px}
+  .summary .item .val{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600}
+
+  #status{padding:40px 0;text-align:center;color:var(--grey)}
+  #status.error{color:var(--red)}
+
+  #gate{position:fixed;inset:0;background:var(--coal);display:flex;align-items:center;justify-content:center;z-index:10}
+  #gate input{font-family:'IBM Plex Mono',monospace;font-size:15px;padding:10px 14px;border:none;border-radius:6px;outline:none;text-align:center;width:220px}
+  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--coal);border:none;border-radius:6px;padding:9px 24px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="gate"><form onsubmit="return checkPass(event)">
+  <input type="password" id="passInput" placeholder="Пароль" autofocus>
+  <button type="submit">Войти</button>
+</form></div>
+
+<header>
+  <h1>Воронка <span>·</span> Прознание / CODDY</h1>
+  <div id="updated" style="font-size:12px;color:#9a9a94"></div>
+</header>
+
+<div class="wrap">
+  <div id="status">Загрузка…</div>
+  <div id="content" style="display:none">
+    <div class="tabs" id="tabs"></div>
+    <div class="seg" id="seg">
+      <button data-seg="total" class="active">Все источники</button>
+      <button data-seg="ig">Только Instagram</button>
+      <button data-seg="other">Прочие</button>
+    </div>
+    <div class="hint">Отметьте галочкой стадии, которые считаете успешной продажей — конверсия пересчитается.</div>
+    <div class="funnel" id="funnel"></div>
+    <div class="summary" id="summary"></div>
+  </div>
+</div>
+
+<script>
+/* ============ НАСТРОЙКИ ============ */
+const GAS_URL = 'ВСТАВЬТЕ_URL_GAS';   // тот же /exec, но с ?view=funnel
+const PASSWORD = 'proznanie';
+/* =================================== */
+
+let data = null;
+let currentPipe = null;
+let currentSeg = 'total';
+let winStages = {};  // pipeline -> Set выбранных стадий (в памяти сессии)
+
+if (sessionStorage.getItem('fb_dash_auth') === '1') document.getElementById('gate').style.display='none';
+function checkPass(e){e.preventDefault();
+  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
+  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
+  return false;}
+
+document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); currentSeg=b.dataset.seg; renderFunnel();
+}));
+
+async function load(){
+  const s=document.getElementById('status');
+  try{
+    const resp=await fetch(GAS_URL+'?view=funnel');
+    data=await resp.json();
+    if(data.error) throw new Error(data.error);
+    const pipes=Object.keys(data.pipelines||{});
+    if(!pipes.length) throw new Error('Нет данных воронки. Запустите buildMart.');
+    currentPipe=pipes[0];
+    renderTabs(pipes);
+    renderFunnel();
+    s.style.display='none';
+    document.getElementById('content').style.display='block';
+  }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
+}
+
+function renderTabs(pipes){
+  const box=document.getElementById('tabs'); box.innerHTML='';
+  pipes.forEach(p=>{
+    const b=document.createElement('button'); b.textContent=p;
+    if(p===currentPipe) b.classList.add('active');
+    b.onclick=()=>{currentPipe=p;renderTabs(pipes);renderFunnel();};
+    box.appendChild(b);
+  });
+}
+
+const fld = s => currentSeg==='ig'?s.ig : currentSeg==='other'?s.other : s.total;
+
+function renderFunnel(){
+  const stages=data.pipelines[currentPipe]||[];
+  const box=document.getElementById('funnel'); box.innerHTML='';
+  const max=Math.max(1,...stages.map(fld));
+  if(!winStages[currentPipe]) winStages[currentPipe]=new Set();
+  const wins=winStages[currentPipe];
+
+  stages.forEach(s=>{
+    const n=fld(s);
+    const row=document.createElement('div');
+    row.className='stage'+(wins.has(s.stage)?' win':'');
+    row.innerHTML=`
+      <input type="checkbox" ${wins.has(s.stage)?'checked':''}>
+      <span class="name">${s.stage}</span>
+      <span class="bar-wrap"><span class="bar" style="width:${n/max*100}%"></span></span>
+      <span class="cnt">${n.toLocaleString('ru-RU')}</span>`;
+    row.querySelector('input').onchange=e=>{
+      if(e.target.checked) wins.add(s.stage); else wins.delete(s.stage);
+      renderFunnel();
+    };
+    box.appendChild(row);
+  });
+  renderSummary(stages,wins);
+}
+
+function renderSummary(stages,wins){
+  const totalLeads=stages.reduce((a,s)=>a+fld(s),0);
+  const won=stages.filter(s=>wins.has(s.stage)).reduce((a,s)=>a+fld(s),0);
+  const conv=totalLeads?(won/totalLeads*100).toFixed(1)+'%':'—';
+  document.getElementById('summary').innerHTML=`
+    <div class="item"><div class="label">Всего заявок</div><div class="val">${totalLeads.toLocaleString('ru-RU')}</div></div>
+    <div class="item"><div class="label">Успешных (отмечено)</div><div class="val">${won.toLocaleString('ru-RU')}</div></div>
+    <div class="item"><div class="label">Конверсия</div><div class="val">${conv}</div></div>`;
+}
+
+load();
+</script>
+</body>
+</html>
