@@ -149,6 +149,8 @@
       <button data-seg="total" class="active">Все источники</button>
       <button data-seg="ig">Только Instagram</button>
       <button data-seg="other">Прочие</button>
+      <button data-seg="active">Действующий</button>
+      <button data-seg="archive">Из архива</button>
     </div>
     <div class="hint">Отметьте галочкой стадии, которые считаете успешной продажей — конверсия пересчитается.</div>
     <div class="funnel" id="funnel"></div>
@@ -230,7 +232,8 @@ function renderTabs(pipes){
   });
 }
 
-const fld = s => currentSeg==='ig'?s.ig : currentSeg==='other'?s.other : s.total;
+const fld = s => currentSeg==='ig'?s.ig : currentSeg==='other'?s.other
+  : currentSeg==='active'?(s.active||0) : currentSeg==='archive'?(s.archive||0) : s.total;
 
 // собираем стадии выбранной воронки за выбранный период, сохраняя порядок появления
 function stagesFor(pipe){
@@ -238,8 +241,9 @@ function stagesFor(pipe){
   data.rows.forEach(r=>{
     if(r.pipeline!==pipe) return;
     if(currentMonth!=='all' && r.month!==currentMonth) return;
-    if(!agg[r.stage]){ agg[r.stage]={stage:r.stage,total:0,ig:0,other:0}; order.push(r.stage); }
+    if(!agg[r.stage]){ agg[r.stage]={stage:r.stage,total:0,ig:0,other:0,active:0,archive:0}; order.push(r.stage); }
     agg[r.stage].total+=r.total; agg[r.stage].ig+=r.ig; agg[r.stage].other+=r.other;
+    agg[r.stage].active+=(r.active||0); agg[r.stage].archive+=(r.archive||0);
   });
   return order.map(s=>agg[s]);
 }
