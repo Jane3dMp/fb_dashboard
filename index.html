@@ -1,129 +1,367 @@
-/**
- * build_channel.gs — витрина «Instagram-канал» по месяцам
- * ------------------------------------------------
- * Сопоставляет ПОМЕСЯЧНО:
- *   расход Instagram-рекламы (из Meta, все кампании всех кабинетов)
- *   × количество IG-заявок из amoCRM (source = Instagram)
- *
- * Данные:
- *   - расход берётся напрямую из Meta через getMetaMonthly_() (тот же токен/аккаунты)
- *   - заявки — из листа RAW_leads (наполняет etl_amo.gs)
- *
- * Уровень: КАНАЛ Instagram целиком, НЕ по кампаниям (в данных amo нет привязки к кампании).
- * Выручки в деньгах нет (в amoCRM price=0; деньги в Alpha, подключим позже).
- *
- * Script Properties: SHEET_ID, FB_TOKEN, AD_ACCOUNTS (уже заданы)
- * Запуск: buildChannel()  — затем данные читает getChannelJson() через ?view=channel
- */
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Реклама Meta — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --coal: #141414; --paper: #F7F6F2; --yellow: #FFD400;
+    --blue: #2456D6; --grey: #8A8A84; --line: #E3E1DA; --card: #FFFFFF;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', sans-serif; background: var(--paper); color: var(--coal); min-height: 100vh; }
 
-var SH_LEADS_CH = 'RAW_leads';
-var SH_CHANNEL = 'MART_channel_month';
-var FB_API_VER_CH = 'v25.0';
+  header {
+    background: var(--coal); color: #fff; padding: 20px 24px;
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 17px; font-weight: 600; }
+  header h1 span { color: var(--yellow); }
+  nav.dashnav { background: #1f1f1f; padding: 0 24px; display: flex; gap: 4px; border-bottom: 1px solid #2c2c2c; }
+  nav.dashnav a { color: #b8b8b2; font-size: 13px; font-weight: 600; text-decoration: none; padding: 12px 16px; border-bottom: 2px solid transparent; }
+  nav.dashnav a:hover { color: #fff; }
+  nav.dashnav a.active { color: var(--yellow); border-bottom-color: var(--yellow); }
+  #updated { font-size: 12px; color: #9a9a94; }
 
-function buildChannel() {
-  var props = PropertiesService.getScriptProperties();
-  var sheetId = props.getProperty('SHEET_ID');
-  if (!sheetId) throw new Error('Не задан SHEET_ID');
-  var ss = SpreadsheetApp.openById(sheetId);
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 24px 60px; }
 
-  // 1) расход IG по месяцам из Meta (за последние 13 месяцев)
-  var spendByMonth = getMetaMonthly_(props, 13);
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .controls button, .controls input[type=date] {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 14px; cursor: pointer; color: var(--coal);
+  }
+  .controls input[type=date] { cursor: auto; padding: 6px 10px; }
+  .controls button.active { background: var(--coal); color: var(--yellow); border-color: var(--coal); }
+  .controls .sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+  .controls .refresh { margin-left: auto; color: var(--grey); background: transparent; }
 
-  // 2) IG-заявки по месяцам из RAW_leads
-  var sh = ss.getSheetByName(SH_LEADS_CH);
-  if (!sh) throw new Error('Нет листа ' + SH_LEADS_CH);
-  var data = sh.getDataRange().getValues();
-  var header = data.shift();
-  var iDate = header.indexOf('created_at');
-  var iSource = header.indexOf('source');
-  var iStage = header.indexOf('stage');
+  .accounts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .accounts button {
+    font-size: 13px; font-weight: 600; font-family: 'IBM Plex Sans', sans-serif;
+    background: transparent; border: 1px solid var(--line); border-radius: 20px;
+    padding: 6px 16px; cursor: pointer; color: var(--coal);
+  }
+  .accounts button.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
-  var leadsByMonth = {};   // 'YYYY-MM' -> {leads, won}
-  data.forEach(function (r) {
-    if (!/^(instagram|ig)$/i.test(String(r[iSource] || '').trim())) return;
-    var d = r[iDate];
-    if (!(d instanceof Date)) return;
-    var m = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
-    if (!leadsByMonth[m]) leadsByMonth[m] = { leads: 0, won: 0 };
-    leadsByMonth[m].leads++;
-    if (/успешно реализовано/i.test(String(r[iStage] || ''))) leadsByMonth[m].won++;
-  });
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 24px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi .label { font-size: 12px; color: var(--grey); margin-bottom: 6px; }
+  .kpi .value { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; }
+  .kpi.main { border-top: 3px solid var(--yellow); }
+  .kpi.blue { border-top: 3px solid var(--blue); }
 
-  // 3) объединяем по месяцам
-  var months = {};
-  Object.keys(spendByMonth).forEach(function (m) { months[m] = true; });
-  Object.keys(leadsByMonth).forEach(function (m) { months[m] = true; });
-  var rows = Object.keys(months).sort().map(function (m) {
-    var sp = spendByMonth[m] || 0;
-    var lb = leadsByMonth[m] || { leads: 0, won: 0 };
-    var cpl = lb.leads ? Math.round(sp / lb.leads * 100) / 100 : '';
-    return [m, sp, lb.leads, lb.won, cpl];
-  });
+  .block { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 24px; }
+  .block h2 { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+  .chart-box { position: relative; height: 280px; }
 
-  var sh2 = writeSheet_(ss, SH_CHANNEL,
-    ['month', 'ig_spend_usd', 'ig_leads', 'ig_won', 'cost_per_lead_usd'], rows);
-  if (rows.length) sh2.getRange(2, 1, rows.length, 1).setNumberFormat('@'); // month как текст
-  Logger.log('MART_channel_month: ' + rows.length + ' месяцев');
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+  th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 180px; }
+  th { font-size: 11px; font-weight: 600; color: var(--grey); text-transform: uppercase; letter-spacing: .04em; }
+  td { font-family: 'IBM Plex Mono', monospace; }
+  td:first-child { font-family: 'IBM Plex Sans', sans-serif; font-weight: 500; }
+  td:first-child small { display: block; color: var(--grey); font-weight: 400; }
+  tr.total td { font-weight: 600; border-top: 2px solid var(--coal); border-bottom: none; }
+
+  #status { padding: 40px 0; text-align: center; color: var(--grey); font-size: 14px; }
+  #status.error { color: #B33A2B; }
+  #warnings { font-size: 12px; color: #B33A2B; margin-bottom: 14px; }
+
+  #gate { position: fixed; inset: 0; background: var(--coal); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #gate input {
+    font-family: 'IBM Plex Mono', monospace; font-size: 15px; padding: 10px 14px;
+    border: none; border-radius: 6px; outline: none; text-align: center; width: 220px;
+  }
+  #gate button {
+    display: block; margin: 12px auto 0; font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px; font-weight: 600; background: var(--yellow); color: var(--coal);
+    border: none; border-radius: 6px; padding: 9px 24px; cursor: pointer;
+  }
+  @media (max-width: 600px) {
+    .wrap { padding: 16px 14px 40px; }
+    .kpi .value { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <form onsubmit="return checkPass(event)">
+    <input type="password" id="passInput" placeholder="Пароль" autofocus>
+    <button type="submit">Войти</button>
+  </form>
+</div>
+
+<header>
+  <h1>Реклама Meta <span>·</span> Прознание / CODDY</h1>
+  <div id="updated"></div>
+</header>
+<nav class="dashnav">
+  <a href="index.html" class="active">Расход</a>
+  <a href="funnel.html">Воронка</a>
+  <a href="channel.html">Instagram-канал</a>
+</nav>
+
+<div class="wrap">
+  <div class="controls">
+    <button data-days="7">7 дней</button>
+    <button data-days="14">14 дней</button>
+    <button data-days="30" class="active">30 дней</button>
+    <span class="sep"></span>
+    <input type="date" id="dateFrom">
+    <input type="date" id="dateTo">
+    <button id="applyRange">Показать</button>
+    <button class="refresh" id="btnRefresh">Обновить</button>
+  </div>
+
+  <div class="accounts" id="accounts"></div>
+  <div id="warnings"></div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div class="kpis">
+      <div class="kpi main"><div class="label">Расход</div><div class="value" id="kSpend">—</div></div>
+      <div class="kpi"><div class="label">Лиды</div><div class="value" id="kLeads">—</div></div>
+      <div class="kpi"><div class="label">Переписки</div><div class="value" id="kMsgs">—</div></div>
+      <div class="kpi main"><div class="label">Цена лида</div><div class="value" id="kCpl">—</div></div>
+      <div class="kpi blue"><div class="label">Клики</div><div class="value" id="kClicks">—</div></div>
+      <div class="kpi blue"><div class="label">CTR</div><div class="value" id="kCtr">—</div></div>
+    </div>
+
+    <div class="block">
+      <h2>Расход и лиды по дням</h2>
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="block">
+      <h2>По кампаниям</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Кампания</th><th>Расход</th><th>Показы</th><th>Клики</th>
+            <th>CTR</th><th>CPC</th><th>Лиды</th><th>Переписки</th><th>CPL</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= НАСТРОЙКИ ================= */
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';
+const PASSWORD = 'proznanie';
+/* ============================================= */
+
+let lastData = null;      // ответ бэкенда целиком
+let currentAccount = 'all';
+let currentQuery = 'days=30';
+let chart = null;
+
+/* ---------- пароль ---------- */
+if (sessionStorage.getItem('fb_dash_auth') === '1') {
+  document.getElementById('gate').style.display = 'none';
+}
+function checkPass(e) {
+  e.preventDefault();
+  if (document.getElementById('passInput').value === PASSWORD) {
+    sessionStorage.setItem('fb_dash_auth', '1');
+    document.getElementById('gate').style.display = 'none';
+  } else {
+    document.getElementById('passInput').value = '';
+    document.getElementById('passInput').placeholder = 'Неверный пароль';
+  }
+  return false;
 }
 
-/** Расход Instagram по месяцам из Meta по всем аккаунтам из AD_ACCOUNTS */
-function getMetaMonthly_(props, monthsBack) {
-  var token = props.getProperty('FB_TOKEN');
-  var raw = props.getProperty('AD_ACCOUNTS') || props.getProperty('AD_ACCOUNT_ID') || '';
-  if (!token || !raw) throw new Error('Нет FB_TOKEN / AD_ACCOUNTS');
+/* ---------- период: пресеты ---------- */
+document.querySelectorAll('.controls button[data-days]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    setActivePreset(btn);
+    currentQuery = 'days=' + btn.dataset.days;
+    loadData();
+  });
+});
 
-  var accounts = raw.split(',').map(function (p) {
-    return p.trim().split(':')[0].replace('act_', '').trim();
-  }).filter(Boolean);
+function setActivePreset(btn) {
+  document.querySelectorAll('.controls button[data-days]').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
 
-  var until = new Date();
-  var since = new Date(until.getFullYear(), until.getMonth() - monthsBack, 1);
-  var tr = encodeURIComponent(JSON.stringify({
-    since: Utilities.formatDate(since, 'Europe/Minsk', 'yyyy-MM-dd'),
-    until: Utilities.formatDate(until, 'Europe/Minsk', 'yyyy-MM-dd')
-  }));
+/* ---------- период: произвольный ---------- */
+document.getElementById('applyRange').addEventListener('click', () => {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('Укажите обе даты'); return; }
+  if (from > to) { alert('Дата начала позже даты конца'); return; }
+  setActivePreset(null);
+  currentQuery = 'since=' + from + '&until=' + to;
+  loadData();
+});
 
-  var byMonth = {};
-  accounts.forEach(function (id) {
-    // time_increment=monthly недоступен напрямую — берём по дням и агрегируем
-    var url = 'https://graph.facebook.com/' + FB_API_VER_CH + '/act_' + id + '/insights' +
-      '?level=account&time_increment=1&time_range=' + tr +
-      '&fields=spend&limit=500&access_token=' + encodeURIComponent(token);
-    while (url) {
-      var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      var d = JSON.parse(resp.getContentText());
-      if (d.error) break; // молча пропускаем недоступный кабинет
-      (d.data || []).forEach(function (row) {
-        var m = row.date_start.slice(0, 7);
-        byMonth[m] = (byMonth[m] || 0) + Number(row.spend || 0);
-      });
-      url = (d.paging && d.paging.next) ? d.paging.next : null;
+document.getElementById('btnRefresh').addEventListener('click', () => loadData(true));
+
+/* ---------- фильтр аккаунтов ---------- */
+function renderAccountChips(accounts) {
+  const box = document.getElementById('accounts');
+  box.innerHTML = '';
+  if (!accounts || accounts.length < 2) return; // один кабинет — фильтр не нужен
+  const all = [{ id: 'all', name: 'Все аккаунты' }, ...accounts];
+  all.forEach(a => {
+    const b = document.createElement('button');
+    b.textContent = a.name;
+    b.dataset.id = a.id;
+    if (a.id === currentAccount) b.classList.add('active');
+    b.addEventListener('click', () => {
+      currentAccount = a.id;
+      box.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      render();
+    });
+    box.appendChild(b);
+  });
+}
+
+/* ---------- загрузка ---------- */
+async function loadData(force) {
+  const status = document.getElementById('status');
+  const content = document.getElementById('content');
+  status.style.display = 'block';
+  status.className = '';
+  status.textContent = 'Загрузка…';
+  content.style.display = 'none';
+  document.getElementById('warnings').textContent = '';
+
+  try {
+    const resp = await fetch(GAS_URL + '?' + currentQuery + (force ? '&nocache=1' : ''));
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    lastData = data;
+
+    // если выбранный аккаунт исчез из ответа — сброс на «все»
+    if (currentAccount !== 'all' && !(data.accounts || []).some(a => a.id === currentAccount)) {
+      currentAccount = 'all';
+    }
+    renderAccountChips(data.accounts);
+    if (data.warnings) {
+      document.getElementById('warnings').textContent = 'Частично: ' + data.warnings.join(' | ');
+    }
+    render();
+    status.style.display = 'none';
+    content.style.display = 'block';
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Ошибка: ' + err.message;
+  }
+}
+
+/* ---------- форматирование ---------- */
+const fmtInt = n => n.toLocaleString('ru-RU');
+const fmtMoney = (n, cur) => n.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' ' + cur;
+
+/* ---------- отрисовка (с учётом фильтра аккаунта) ---------- */
+function render() {
+  const data = lastData;
+  const cur = data.currency;
+  const rows = currentAccount === 'all'
+    ? data.rows
+    : data.rows.filter(r => r.account_id === currentAccount);
+
+  document.getElementById('updated').textContent =
+    data.since + ' — ' + data.until + ' · обновлено ' + new Date(data.updated).toLocaleString('ru-RU');
+
+  const t = { spend: 0, impressions: 0, clicks: 0, leads: 0, messages: 0 };
+  rows.forEach(r => { for (const k in t) t[k] += r[k]; });
+
+  document.getElementById('kSpend').textContent = fmtMoney(t.spend, cur);
+  document.getElementById('kLeads').textContent = fmtInt(t.leads);
+  document.getElementById('kMsgs').textContent = fmtInt(t.messages);
+  document.getElementById('kCpl').textContent = t.leads ? fmtMoney(t.spend / t.leads, cur) : '—';
+  document.getElementById('kClicks').textContent = fmtInt(t.clicks);
+  document.getElementById('kCtr').textContent =
+    t.impressions ? (t.clicks / t.impressions * 100).toFixed(2) + '%' : '—';
+
+  /* по дням */
+  const byDay = {};
+  rows.forEach(r => {
+    if (!byDay[r.date]) byDay[r.date] = { spend: 0, conv: 0 };
+    byDay[r.date].spend += r.spend;
+    byDay[r.date].conv += r.leads + r.messages;
+  });
+  const days = Object.keys(byDay).sort();
+  const labels = days.map(d => d.slice(8, 10) + '.' + d.slice(5, 7));
+
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('chart'), {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'Расход, ' + cur, data: days.map(d => byDay[d].spend),
+          backgroundColor: '#FFD400', borderRadius: 3, yAxisID: 'y' },
+        { type: 'line', label: 'Лиды + переписки', data: days.map(d => byDay[d].conv),
+          borderColor: '#2456D6', backgroundColor: '#2456D6', tension: .3, pointRadius: 3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        y: { position: 'left', grid: { color: '#EEECE5' } },
+        y1: { position: 'right', grid: { display: false }, ticks: { precision: 0 } }
+      },
+      plugins: { legend: { labels: { font: { family: 'IBM Plex Sans' } } } }
     }
   });
-  // округление
-  Object.keys(byMonth).forEach(function (m) { byMonth[m] = Math.round(byMonth[m] * 100) / 100; });
-  return byMonth;
+
+  /* по кампаниям */
+  const byCamp = {};
+  rows.forEach(r => {
+    if (!byCamp[r.campaign_id]) {
+      byCamp[r.campaign_id] = { name: r.campaign_name, account: r.account_name,
+        spend: 0, impressions: 0, clicks: 0, leads: 0, messages: 0 };
+    }
+    const c = byCamp[r.campaign_id];
+    c.spend += r.spend; c.impressions += r.impressions; c.clicks += r.clicks;
+    c.leads += r.leads; c.messages += r.messages;
+  });
+
+  const showAccount = currentAccount === 'all' && (data.accounts || []).length > 1;
+  const campaigns = Object.values(byCamp).sort((a, b) => b.spend - a.spend);
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  const rowHtml = c => `
+    <td>${c.name}${showAccount && c.account ? '<small>' + c.account + '</small>' : ''}</td>
+    <td>${fmtMoney(c.spend, cur)}</td>
+    <td>${fmtInt(c.impressions)}</td>
+    <td>${fmtInt(c.clicks)}</td>
+    <td>${c.impressions ? (c.clicks / c.impressions * 100).toFixed(2) + '%' : '—'}</td>
+    <td>${c.clicks ? fmtMoney(c.spend / c.clicks, cur) : '—'}</td>
+    <td>${fmtInt(c.leads)}</td>
+    <td>${fmtInt(c.messages)}</td>
+    <td>${c.leads ? fmtMoney(c.spend / c.leads, cur) : '—'}</td>`;
+
+  campaigns.forEach(c => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowHtml(c);
+    tbody.appendChild(tr);
+  });
+
+  const total = document.createElement('tr');
+  total.className = 'total';
+  total.innerHTML = rowHtml({ name: 'Итого', account: '', ...t });
+  tbody.appendChild(total);
 }
 
-function writeSheet_(ss, name, header, rows) {
-  var sh = ss.getSheetByName(name) || ss.insertSheet(name);
-  sh.clearContents();
-  sh.getRange(1, 1, 1, header.length).setValues([header]);
-  if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
-  return sh;
-}
-
-/** JSON для дашборда: ?view=channel */
-function getChannelJson() {
-  var sheetId = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
-  var ss = SpreadsheetApp.openById(sheetId);
-  var sh = ss.getSheetByName(SH_CHANNEL);
-  if (!sh) return { months: [] };
-  var d = sh.getDataRange().getValues(); d.shift();
-  return {
-    updated: new Date().toISOString(),
-    months: d.map(function (r) {
-      return { month: r[0], spend: r[1], leads: r[2], won: r[3], cpl: r[4] };
-    })
-  };
-}
+loadData();
+</script>
+</body>
+</html>
