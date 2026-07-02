@@ -97,6 +97,9 @@
   .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
   .tabs button{font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 18px;cursor:pointer;color:var(--ink)}
   .tabs button.active{background:var(--yellow);color:var(--ink);border-color:var(--yellow)}
+  .periodrow{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .periodlabel{font-size:13px;color:var(--ink2)}
+  #period select{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 16px;cursor:pointer;color:var(--ink)}
 
   .note{background:var(--yellow-soft);border-radius:16px;padding:14px 18px;font-size:13px;color:#6b5d1a;margin-bottom:22px;line-height:1.55}
   .hint{font-size:13px;color:var(--ink2);margin-bottom:14px}
@@ -138,6 +141,10 @@
   <div id="status">Загрузка…</div>
   <div id="content" style="display:none">
     <div class="tabs" id="tabs"></div>
+    <div class="periodrow">
+      <span class="periodlabel">Период:</span>
+      <span id="period"></span>
+    </div>
     <div class="seg" id="seg">
       <button data-seg="total" class="active">Все источники</button>
       <button data-seg="ig">Только Instagram</button>
@@ -158,6 +165,7 @@ const PASSWORD = 'proznanie';
 let data = null;
 let currentPipe = null;
 let currentSeg = 'total';
+let currentMonth = 'all';   // 'all' | 'YYYY-MM'
 let winStages = {};  // pipeline -> Set выбранных стадий (в памяти сессии)
 
 // Успешная стадия по каждой воронке (подтверждено по данным). Предотмечается автоматически.
@@ -188,14 +196,28 @@ async function load(){
     const resp=await fetch(GAS_URL+'?view=funnel');
     data=await resp.json();
     if(data.error) throw new Error(data.error);
-    const pipes=Object.keys(data.pipelines||{});
-    if(!pipes.length) throw new Error('Нет данных воронки. Запустите buildMart.');
+    if(!data.rows||!data.rows.length) throw new Error('Нет данных воронки. Запустите buildMart.');
+    // список воронок из строк
+    const pipes=[...new Set(data.rows.map(r=>r.pipeline))];
     currentPipe=pipes[0];
+    renderMonthSelect();
     renderTabs(pipes);
     renderFunnel();
     s.style.display='none';
     document.getElementById('content').style.display='block';
   }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
+}
+
+// селектор периода: «Всё время» + месяцы
+function renderMonthSelect(){
+  const box=document.getElementById('period'); box.innerHTML='';
+  const opts=[{v:'all',t:'Всё время'}].concat((data.months||[]).map(m=>({v:m,t:m})));
+  const sel=document.createElement('select');
+  sel.id='monthSel';
+  opts.forEach(o=>{const op=document.createElement('option');op.value=o.v;op.textContent=o.t;sel.appendChild(op);});
+  sel.value=currentMonth;
+  sel.onchange=()=>{currentMonth=sel.value;renderFunnel();};
+  box.appendChild(sel);
 }
 
 function renderTabs(pipes){
@@ -210,13 +232,29 @@ function renderTabs(pipes){
 
 const fld = s => currentSeg==='ig'?s.ig : currentSeg==='other'?s.other : s.total;
 
+// собираем стадии выбранной воронки за выбранный период, сохраняя порядок появления
+function stagesFor(pipe){
+  const order=[]; const agg={};
+  data.rows.forEach(r=>{
+    if(r.pipeline!==pipe) return;
+    if(currentMonth!=='all' && r.month!==currentMonth) return;
+    if(!agg[r.stage]){ agg[r.stage]={stage:r.stage,total:0,ig:0,other:0}; order.push(r.stage); }
+    agg[r.stage].total+=r.total; agg[r.stage].ig+=r.ig; agg[r.stage].other+=r.other;
+  });
+  return order.map(s=>agg[s]);
+}
+
 function renderFunnel(){
-  const stages=data.pipelines[currentPipe]||[];
+  const stages=stagesFor(currentPipe);
   const box=document.getElementById('funnel'); box.innerHTML='';
+  if(!stages.length){
+    box.innerHTML='<div class="hint">За выбранный период в этой воронке заявок нет.</div>';
+    renderSummary([],new Set());
+    return;
+  }
   const max=Math.max(1,...stages.map(fld));
   if(!winStages[currentPipe]){
     winStages[currentPipe]=new Set();
-    // предотметить стадию-успех по карте, если она есть среди стадий воронки
     const def=DEFAULT_WIN[currentPipe];
     if(def && stages.some(s=>s.stage===def)) winStages[currentPipe].add(def);
   }
@@ -244,7 +282,9 @@ function renderSummary(stages,wins){
   const totalLeads=stages.reduce((a,s)=>a+fld(s),0);
   const won=stages.filter(s=>wins.has(s.stage)).reduce((a,s)=>a+fld(s),0);
   const conv=totalLeads?(won/totalLeads*100).toFixed(1)+'%':'—';
+  const period=currentMonth==='all'?'всё время':currentMonth;
   document.getElementById('summary').innerHTML=`
+    <div class="item"><div class="label">Период</div><div class="val" style="font-size:18px">${period}</div></div>
     <div class="item"><div class="label">Всего заявок</div><div class="val">${totalLeads.toLocaleString('ru-RU')}</div></div>
     <div class="item"><div class="label">Успешных (отмечено)</div><div class="val">${won.toLocaleString('ru-RU')}</div></div>
     <div class="item"><div class="label">Конверсия</div><div class="val">${conv}</div></div>`;
