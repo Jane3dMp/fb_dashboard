@@ -31,6 +31,8 @@
   td:first-child{font-family:'IBM Plex Sans',sans-serif;font-weight:500}
   tr.total td{font-weight:600;border-top:2px solid var(--coal);border-bottom:none}
   td.tcol{font-weight:600}
+  .seg button{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 14px;cursor:pointer;color:var(--coal)}
+  .seg button.active{background:var(--coal);color:var(--yellow);border-color:var(--coal)}
   #status{padding:40px 0;text-align:center;color:var(--grey)}
   #status.error{color:#B33A2B}
   #gate{position:fixed;inset:0;background:var(--coal);display:flex;align-items:center;justify-content:center;z-index:10}
@@ -56,14 +58,19 @@
 <div class="wrap">
   <div id="status">Загрузка…</div>
   <div id="content" style="display:none">
+    <div class="seg" id="seg" style="display:flex;gap:8px;margin-bottom:18px">
+      <button data-seg="all" class="active">Все</button>
+      <button data-seg="ig">Instagram</button>
+      <button data-seg="other">Прочие</button>
+    </div>
     <div class="block">
       <h2>Заявки по направлениям, помесячно</h2>
       <div class="chart-box"><canvas id="chart"></canvas></div>
     </div>
     <div class="block">
-      <h2>Таблица</h2>
+      <h2>Таблица (IG / прочие по каждому направлению)</h2>
       <div class="table-scroll"><table>
-        <thead><tr id="thead"></tr></thead>
+        <thead><tr id="thead"></tr><tr id="thead2"></tr></thead>
         <tbody id="tbody"></tbody>
       </table></div>
     </div>
@@ -85,6 +92,7 @@ function checkPass(e){e.preventDefault();
   return false;}
 
 const int=n=>Number(n||0).toLocaleString('ru-RU');
+let DATA=null, seg='all'; // all | ig | other
 
 async function load(){
   const s=document.getElementById('status');
@@ -93,43 +101,67 @@ async function load(){
     const data=await resp.json();
     if(data.error) throw new Error(data.error);
     if(!data.months||!data.months.length) throw new Error('Нет данных. Запустите buildBrands.');
-    render(data);
+    DATA=data;
+    render();
     s.style.display='none';
     document.getElementById('content').style.display='block';
   }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
 }
 
-function render(data){
+// значение ячейки под текущий сегмент
+const val=(cell)=> seg==='ig'?cell.ig : seg==='other'?cell.other : (cell.ig+cell.other);
+
+let chart=null;
+function render(){
+  const data=DATA;
   const labels=data.months.map(m=>m.month);
   const datasets=data.brands.map((b,i)=>({
     label:b,
-    data:data.months.map(m=>m.values[b]||0),
+    data:data.months.map(m=>val(m.values[b]||{ig:0,other:0})),
     backgroundColor:COLORS[i%COLORS.length],
-    borderRadius:2,
-    stack:'s'
+    borderRadius:2, stack:'s'
   }));
-  new Chart(document.getElementById('chart'),{
-    type:'bar',
-    data:{labels,datasets},
+  if(chart) chart.destroy();
+  chart=new Chart(document.getElementById('chart'),{
+    type:'bar', data:{labels,datasets},
     options:{responsive:true,maintainAspectRatio:false,
       scales:{x:{stacked:true},y:{stacked:true,grid:{color:'#EEECE5'},ticks:{precision:0}}},
       plugins:{legend:{labels:{font:{family:'IBM Plex Sans'}}}}}
   });
 
-  // таблица
+  // таблица: по две колонки на группу (IG / прочие) + Итого
   const thead=document.getElementById('thead');
-  thead.innerHTML='<th>Месяц</th>'+data.brands.map(b=>'<th>'+b+'</th>').join('')+'<th>Итого</th>';
+  let h='<th rowspan="2">Месяц</th>';
+  data.brands.forEach(b=>{h+='<th colspan="2">'+b+'</th>';});
+  h+='<th rowspan="2">Итого</th>';
+  thead.innerHTML=h;
+  // вторая строка заголовка
+  let sub='';
+  data.brands.forEach(()=>{sub+='<th>IG</th><th>прочие</th>';});
+  document.getElementById('thead2').innerHTML=sub;
+
   const tb=document.getElementById('tbody');tb.innerHTML='';
-  const totals={};data.brands.forEach(b=>totals[b]=0);let grand=0;
+  const totIg={},totOt={};data.brands.forEach(b=>{totIg[b]=0;totOt[b]=0;});let grand=0;
   data.months.forEach(m=>{
-    let html='<td>'+m.month+'</td>';
-    data.brands.forEach(b=>{const v=m.values[b]||0;totals[b]+=v;html+='<td>'+int(v)+'</td>';});
-    html+='<td class="tcol">'+int(m.total)+'</td>';grand+=m.total;
-    const tr=document.createElement('tr');tr.innerHTML=html;tb.appendChild(tr);
+    let row='<td>'+m.month+'</td>';
+    data.brands.forEach(b=>{
+      const c=m.values[b]||{ig:0,other:0};
+      totIg[b]+=c.ig;totOt[b]+=c.other;
+      row+='<td>'+int(c.ig)+'</td><td>'+int(c.other)+'</td>';
+    });
+    row+='<td class="tcol">'+int(m.total)+'</td>';grand+=m.total;
+    const tr=document.createElement('tr');tr.innerHTML=row;tb.appendChild(tr);
   });
-  let ft='<td>Итого</td>';data.brands.forEach(b=>ft+='<td>'+int(totals[b])+'</td>');ft+='<td>'+int(grand)+'</td>';
+  let ft='<td>Итого</td>';
+  data.brands.forEach(b=>{ft+='<td>'+int(totIg[b])+'</td><td>'+int(totOt[b])+'</td>';});
+  ft+='<td>'+int(grand)+'</td>';
   const tr=document.createElement('tr');tr.className='total';tr.innerHTML=ft;tb.appendChild(tr);
 }
+
+document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); seg=b.dataset.seg; render();
+}));
 
 load();
 </script>
