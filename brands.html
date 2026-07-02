@@ -24,13 +24,20 @@
   .chart-box{position:relative;height:340px}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
-  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th,td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line)}
   th:first-child,td:first-child{text-align:left}
-  th{font-size:11px;font-weight:600;color:var(--grey);text-transform:uppercase;letter-spacing:.04em}
+  thead tr:first-child th{font-size:12px;font-weight:600;color:var(--coal);text-transform:none;letter-spacing:0;border-bottom:none;padding-bottom:2px}
+  thead tr:nth-child(2) th{font-size:10px;font-weight:600;color:var(--grey);text-transform:uppercase;letter-spacing:.03em;padding-top:0}
   td{font-family:'IBM Plex Mono',monospace}
   td:first-child{font-family:'IBM Plex Sans',sans-serif;font-weight:500}
+  /* разделитель между группами: левая граница на первой колонке каждой группы */
+  th.grp,td.grp{border-left:1px solid var(--line)}
+  /* колонка "прочие" — лёгкий фон, чтобы пара IG|прочие читалась как блок */
+  td.other,th.other{background:#FAF8F3}
+  /* нулевые значения приглушаем */
+  td.zero{color:#C9C7C0}
   tr.total td{font-weight:600;border-top:2px solid var(--coal);border-bottom:none}
-  td.tcol{font-weight:600}
+  td.tcol,th.tcol{font-weight:600;border-left:2px solid var(--coal);background:#FFFBEA}
   .seg button{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 14px;cursor:pointer;color:var(--coal)}
   .seg button.active{background:var(--coal);color:var(--yellow);border-color:var(--coal)}
   #status{padding:40px 0;text-align:center;color:var(--grey)}
@@ -132,13 +139,14 @@ function render(){
   // таблица: по две колонки на группу (IG / прочие) + Итого
   const thead=document.getElementById('thead');
   let h='<th rowspan="2">Месяц</th>';
-  data.brands.forEach(b=>{h+='<th colspan="2">'+b+'</th>';});
-  h+='<th rowspan="2">Итого</th>';
+  data.brands.forEach(b=>{h+='<th colspan="2" class="grp">'+b+'</th>';});
+  h+='<th rowspan="2" class="tcol">Итого</th>';
   thead.innerHTML=h;
-  // вторая строка заголовка
   let sub='';
-  data.brands.forEach(()=>{sub+='<th>IG</th><th>прочие</th>';});
+  data.brands.forEach(()=>{sub+='<th class="grp">IG</th><th class="other">прочие</th>';});
   document.getElementById('thead2').innerHTML=sub;
+
+  const z=(v)=> v?'':' zero'; // класс для нуля
 
   const tb=document.getElementById('tbody');tb.innerHTML='';
   const totIg={},totOt={};data.brands.forEach(b=>{totIg[b]=0;totOt[b]=0;});let grand=0;
@@ -147,14 +155,18 @@ function render(){
     data.brands.forEach(b=>{
       const c=m.values[b]||{ig:0,other:0};
       totIg[b]+=c.ig;totOt[b]+=c.other;
-      row+='<td>'+int(c.ig)+'</td><td>'+int(c.other)+'</td>';
+      row+='<td class="grp'+z(c.ig)+'">'+int(c.ig)+'</td>'+
+           '<td class="other'+z(c.other)+'">'+int(c.other)+'</td>';
     });
     row+='<td class="tcol">'+int(m.total)+'</td>';grand+=m.total;
     const tr=document.createElement('tr');tr.innerHTML=row;tb.appendChild(tr);
   });
   let ft='<td>Итого</td>';
-  data.brands.forEach(b=>{ft+='<td>'+int(totIg[b])+'</td><td>'+int(totOt[b])+'</td>';});
-  ft+='<td>'+int(grand)+'</td>';
+  data.brands.forEach(b=>{
+    ft+='<td class="grp'+z(totIg[b])+'">'+int(totIg[b])+'</td>'+
+        '<td class="other'+z(totOt[b])+'">'+int(totOt[b])+'</td>';
+  });
+  ft+='<td class="tcol">'+int(grand)+'</td>';
   const tr=document.createElement('tr');tr.className='total';tr.innerHTML=ft;tb.appendChild(tr);
 }
 
