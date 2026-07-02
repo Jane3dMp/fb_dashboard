@@ -14,6 +14,10 @@
   header{background:var(--coal);color:#fff;padding:20px 24px}
   header h1{font-size:17px;font-weight:600}
   header h1 span{color:var(--yellow)}
+  nav.dashnav{background:#1f1f1f;padding:0 24px;display:flex;gap:4px;border-bottom:1px solid #2c2c2c}
+  nav.dashnav a{color:#b8b8b2;font-size:13px;font-weight:600;text-decoration:none;padding:12px 16px;border-bottom:2px solid transparent}
+  nav.dashnav a:hover{color:#fff}
+  nav.dashnav a.active{color:var(--yellow);border-bottom-color:var(--yellow)}
   .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
   .note{background:#FFF8DC;border:1px solid #F0E4A8;border-radius:8px;padding:12px 14px;font-size:12px;color:#6b5d1a;margin-bottom:20px;line-height:1.5}
   .block{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:24px}
@@ -40,6 +44,11 @@
 </form></div>
 
 <header><h1>Instagram-канал <span>·</span> расход и заявки по месяцам</h1></header>
+<nav class="dashnav">
+  <a href="index.html">Расход</a>
+  <a href="funnel.html">Воронка</a>
+  <a href="channel.html" class="active">Instagram-канал</a>
+</nav>
 
 <div class="wrap">
   <div class="note">
@@ -94,8 +103,10 @@ async function load(){
   }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
 }
 
+const ym=v=>String(v).slice(0,7); // '2025-05-31T...' → '2025-05'
+
 function render(months){
-  const labels=months.map(m=>m.month);
+  const labels=months.map(m=>ym(m.month));
   new Chart(document.getElementById('chart'),{
     data:{labels,datasets:[
       {type:'bar',label:'Расход, $',data:months.map(m=>m.spend),backgroundColor:'#FFD400',borderRadius:3,yAxisID:'y'},
@@ -112,7 +123,7 @@ function render(months){
   months.forEach(m=>{
     tSpend+=Number(m.spend||0);tLeads+=Number(m.leads||0);tWon+=Number(m.won||0);
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${m.month}</td><td>${money(m.spend)}</td><td>${int(m.leads)}</td><td>${int(m.won)}</td><td>${m.cpl?money(m.cpl):'—'}</td>`;
+    tr.innerHTML=`<td>${ym(m.month)}</td><td>${money(m.spend)}</td><td>${int(m.leads)}</td><td>${int(m.won)}</td><td>${m.cpl?money(m.cpl):'—'}</td>`;
     tb.appendChild(tr);
   });
   const tr=document.createElement('tr');tr.className='total';
