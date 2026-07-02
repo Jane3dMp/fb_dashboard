@@ -6,53 +6,110 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Воронка — Прознание / CODDY</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --coal:#141414; --paper:#F7F6F2; --yellow:#FFD400; --blue:#2456D6;
-    --grey:#8A8A84; --line:#E3E1DA; --card:#FFFFFF; --green:#2E7D46; --red:#B33A2B;
+  :root{
+    --cream:#F5F1E8; --card:#FFFFFF; --ink:#1C1B19; --ink2:#6E6A62;
+    --yellow:#FFD93B; --yellow-soft:#FBF0C4; --line:#EBE6DB;
+    --blue:#3B5BDB; --green:#2E7D46; --red:#C0392B; --shadow:0 2px 14px rgba(28,27,25,.06);
   }
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--coal);min-height:100vh}
-  header{background:var(--coal);color:#fff;padding:20px 24px;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:12px}
-  header h1{font-size:17px;font-weight:600}
-  header h1 span{color:var(--yellow)}
-  nav.dashnav{background:#1f1f1f;padding:0 24px;display:flex;gap:4px;border-bottom:1px solid #2c2c2c}
-  nav.dashnav a{color:#b8b8b2;font-size:13px;font-weight:600;text-decoration:none;padding:12px 16px;border-bottom:2px solid transparent}
-  nav.dashnav a:hover{color:#fff}
-  nav.dashnav a.active{color:var(--yellow);border-bottom-color:var(--yellow)}
-  .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
+  body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .num,.value,td{font-variant-numeric:tabular-nums}
+
+  /* ---- топбар: белая пилюля с навигацией ---- */
+  .topbar{max-width:1160px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
+  .brand b{color:#C9A800}
+  nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
+  nav.dashnav a{color:var(--ink2);font-size:13px;font-weight:500;text-decoration:none;padding:9px 18px;border-radius:100px;transition:.15s}
+  nav.dashnav a:hover{color:var(--ink)}
+  nav.dashnav a.active{background:var(--ink);color:#fff}
+  #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
+
+  /* ---- заголовок страницы ---- */
+  .pagehead{max-width:1160px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
+  .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
+
+  .wrap{max-width:1160px;margin:0 auto;padding:18px 24px 60px}
+
+  /* ---- контролы ---- */
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .controls button,.controls input[type=date],.seg button{
+    font-family:'Inter',sans-serif;font-size:13px;font-weight:500;
+    background:var(--card);border:1px solid var(--line);border-radius:100px;
+    padding:8px 16px;cursor:pointer;color:var(--ink)
+  }
+  .controls input[type=date]{cursor:auto;border-radius:12px;padding:7px 12px}
+  .controls button.active,.seg button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .controls .sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+  .controls .refresh{margin-left:auto;color:var(--ink2)}
+  .seg{display:flex;gap:8px;margin-bottom:18px}
+
+  .accounts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+  .accounts button{font-size:13px;font-weight:500;font-family:'Inter',sans-serif;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 18px;cursor:pointer;color:var(--ink)}
+  .accounts button.active{background:var(--yellow);color:var(--ink);border-color:var(--yellow)}
+
+  /* ---- KPI ---- */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{background:var(--card);border-radius:20px;padding:20px 22px;box-shadow:var(--shadow)}
+  .kpi .label{font-size:13px;color:var(--ink2);margin-bottom:10px}
+  .kpi .value{font-family:'Poppins',sans-serif;font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1}
+  .kpi.main{background:var(--yellow-soft)}
+  .kpi.blue .value{color:var(--blue)}
+
+  /* ---- блоки-карточки ---- */
+  .block{background:var(--card);border-radius:22px;padding:24px;margin-bottom:24px;box-shadow:var(--shadow)}
+  .block h2{font-family:'Poppins',sans-serif;font-size:16px;font-weight:600;margin-bottom:18px}
+  .chart-box{position:relative;height:300px}
+
+  /* ---- таблица ---- */
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+  th,td{padding:11px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em}
+  td{font-family:'Inter',sans-serif}
+  td:first-child{font-weight:500}
+  td:first-child small{display:block;color:var(--ink2);font-weight:400}
+  tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+  td.tcol,th.tcol{font-weight:700;border-left:2px solid var(--ink);background:var(--yellow-soft)}
+  th.grp,td.grp{border-left:1px solid var(--line)}
+  td.other,th.other{background:#FBF9F4}
+  td.zero{color:#CFCABE}
+
+  /* ---- воронка ---- */
+  .funnel{display:flex;flex-direction:column;gap:8px;margin-bottom:24px}
+  .stage{display:flex;align-items:center;gap:14px;background:var(--card);border-radius:14px;padding:12px 16px;box-shadow:var(--shadow)}
+  .stage input{width:18px;height:18px;cursor:pointer;flex:none;accent-color:var(--green)}
+  .stage .name{flex:1;font-size:14px}
+  .stage .bar-wrap{flex:2;background:#F0ECE2;border-radius:100px;height:22px;position:relative;overflow:hidden}
+  .stage .bar{height:100%;background:var(--blue);border-radius:100px}
+  .stage .cnt{font-family:'Poppins',sans-serif;font-weight:600;width:64px;text-align:right}
+  .stage.win{background:#F1F8F3}
+  .stage.win .bar{background:var(--green)}
+  .summary{background:var(--card);border-radius:20px;padding:22px;box-shadow:var(--shadow);display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}
+  .summary .item .label{font-size:13px;color:var(--ink2);margin-bottom:6px}
+  .summary .item .val{font-family:'Poppins',sans-serif;font-size:26px;font-weight:600}
 
   .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
-  .tabs button{font-size:13px;font-weight:600;background:transparent;border:1px solid var(--line);border-radius:20px;padding:6px 16px;cursor:pointer;color:var(--coal)}
-  .tabs button.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .tabs button{font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 18px;cursor:pointer;color:var(--ink)}
+  .tabs button.active{background:var(--yellow);color:var(--ink);border-color:var(--yellow)}
 
-  .seg{display:flex;gap:8px;margin-bottom:20px}
-  .seg button{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 14px;cursor:pointer;color:var(--coal)}
-  .seg button.active{background:var(--coal);color:var(--yellow);border-color:var(--coal)}
+  .note{background:var(--yellow-soft);border-radius:16px;padding:14px 18px;font-size:13px;color:#6b5d1a;margin-bottom:22px;line-height:1.55}
+  .hint{font-size:13px;color:var(--ink2);margin-bottom:14px}
 
-  .hint{font-size:12px;color:var(--grey);margin-bottom:14px}
-
-  .funnel{display:flex;flex-direction:column;gap:6px;margin-bottom:24px}
-  .stage{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
-  .stage input{width:16px;height:16px;cursor:pointer;flex:none}
-  .stage .name{flex:1;font-size:14px}
-  .stage .bar-wrap{flex:2;background:#EEE;border-radius:4px;height:22px;position:relative;overflow:hidden}
-  .stage .bar{height:100%;background:var(--blue);border-radius:4px}
-  .stage .cnt{font-family:'IBM Plex Mono',monospace;font-weight:600;width:60px;text-align:right}
-  .stage.win{border-color:var(--green);background:#F1F8F3}
-  .stage.win .bar{background:var(--green)}
-
-  .summary{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
-  .summary .item .label{font-size:12px;color:var(--grey);margin-bottom:4px}
-  .summary .item .val{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600}
-
-  #status{padding:40px 0;text-align:center;color:var(--grey)}
+  #status{padding:48px 0;text-align:center;color:var(--ink2);font-size:14px}
   #status.error{color:var(--red)}
+  #warnings{font-size:12px;color:var(--red);margin-bottom:14px}
 
-  #gate{position:fixed;inset:0;background:var(--coal);display:flex;align-items:center;justify-content:center;z-index:10}
-  #gate input{font-family:'IBM Plex Mono',monospace;font-size:15px;padding:10px 14px;border:none;border-radius:6px;outline:none;text-align:center;width:220px}
-  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--coal);border:none;border-radius:6px;padding:9px 24px;cursor:pointer}
+  #gate{position:fixed;inset:0;background:var(--ink);display:flex;align-items:center;justify-content:center;z-index:10}
+  #gate input{font-family:'Inter',sans-serif;font-size:15px;padding:12px 16px;border:none;border-radius:12px;outline:none;text-align:center;width:230px}
+  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--ink);border:none;border-radius:100px;padding:11px 28px;cursor:pointer}
+  @media(max-width:600px){.wrap,.pagehead,.topbar{padding-left:14px;padding-right:14px}.kpi .value{font-size:24px}.pagehead h1{font-size:24px}}
+
 </style>
 </head>
 <body>
@@ -62,16 +119,20 @@
   <button type="submit">Войти</button>
 </form></div>
 
-<header>
-  <h1>Воронка <span>·</span> Прознание / CODDY</h1>
-  <div id="updated" style="font-size:12px;color:#9a9a94"></div>
-</header>
-<nav class="dashnav">
+<div class="topbar">
+  <div class="brand">Аналитика<b>.</b></div>
+  <nav class="dashnav">
   <a href="index.html">Расход</a>
   <a href="funnel.html" class="active">Воронка</a>
   <a href="channel.html">Instagram-канал</a>
   <a href="brands.html">Направления</a>
-</nav>
+  </nav>
+  <div id="updated"></div>
+</div>
+<div class="pagehead">
+  <h1>Воронка продаж</h1>
+  <p>Стадии по направлениям и источникам</p>
+</div>
 
 <div class="wrap">
   <div id="status">Загрузка…</div>
