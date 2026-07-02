@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Заявки по направлениям — Прознание / CODDY</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{--coal:#141414;--paper:#F7F6F2;--yellow:#FFD400;--blue:#2456D6;--grey:#8A8A84;--line:#E3E1DA;--card:#FFFFFF}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--coal);min-height:100vh}
+  header{background:var(--coal);color:#fff;padding:20px 24px}
+  header h1{font-size:17px;font-weight:600}
+  header h1 span{color:var(--yellow)}
+  nav.dashnav{background:#1f1f1f;padding:0 24px;display:flex;gap:4px;border-bottom:1px solid #2c2c2c;flex-wrap:wrap}
+  nav.dashnav a{color:#b8b8b2;font-size:13px;font-weight:600;text-decoration:none;padding:12px 16px;border-bottom:2px solid transparent}
+  nav.dashnav a:hover{color:#fff}
+  nav.dashnav a.active{color:var(--yellow);border-bottom-color:var(--yellow)}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
+  .block{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:24px}
+  .block h2{font-size:14px;font-weight:600;margin-bottom:14px}
+  .chart-box{position:relative;height:340px}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:11px;font-weight:600;color:var(--grey);text-transform:uppercase;letter-spacing:.04em}
+  td{font-family:'IBM Plex Mono',monospace}
+  td:first-child{font-family:'IBM Plex Sans',sans-serif;font-weight:500}
+  tr.total td{font-weight:600;border-top:2px solid var(--coal);border-bottom:none}
+  td.tcol{font-weight:600}
+  #status{padding:40px 0;text-align:center;color:var(--grey)}
+  #status.error{color:#B33A2B}
+  #gate{position:fixed;inset:0;background:var(--coal);display:flex;align-items:center;justify-content:center;z-index:10}
+  #gate input{font-family:'IBM Plex Mono',monospace;font-size:15px;padding:10px 14px;border:none;border-radius:6px;text-align:center;width:220px}
+  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--coal);border:none;border-radius:6px;padding:9px 24px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="gate"><form onsubmit="return checkPass(event)">
+  <input type="password" id="passInput" placeholder="Пароль" autofocus>
+  <button type="submit">Войти</button>
+</form></div>
+
+<header><h1>Заявки по направлениям <span>·</span> по месяцам</h1></header>
+<nav class="dashnav">
+  <a href="index.html">Расход</a>
+  <a href="funnel.html">Воронка</a>
+  <a href="channel.html">Instagram-канал</a>
+  <a href="brands.html" class="active">Направления</a>
+</nav>
+
+<div class="wrap">
+  <div id="status">Загрузка…</div>
+  <div id="content" style="display:none">
+    <div class="block">
+      <h2>Заявки по направлениям, помесячно</h2>
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+    </div>
+    <div class="block">
+      <h2>Таблица</h2>
+      <div class="table-scroll"><table>
+        <thead><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ====== НАСТРОЙКИ ====== */
+const GAS_URL = 'ВСТАВЬТЕ_URL_GAS';   // тот же /exec
+const PASSWORD = 'proznanie';
+/* ======================= */
+
+const COLORS = ['#2456D6','#FFD400','#C1694F','#2E7D46','#8A5CD6','#E0912F'];
+
+if(sessionStorage.getItem('fb_dash_auth')==='1') document.getElementById('gate').style.display='none';
+function checkPass(e){e.preventDefault();
+  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
+  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
+  return false;}
+
+const int=n=>Number(n||0).toLocaleString('ru-RU');
+
+async function load(){
+  const s=document.getElementById('status');
+  try{
+    const resp=await fetch(GAS_URL+'?view=brands');
+    const data=await resp.json();
+    if(data.error) throw new Error(data.error);
+    if(!data.months||!data.months.length) throw new Error('Нет данных. Запустите buildBrands.');
+    render(data);
+    s.style.display='none';
+    document.getElementById('content').style.display='block';
+  }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
+}
+
+function render(data){
+  const labels=data.months.map(m=>m.month);
+  const datasets=data.brands.map((b,i)=>({
+    label:b,
+    data:data.months.map(m=>m.values[b]||0),
+    backgroundColor:COLORS[i%COLORS.length],
+    borderRadius:2,
+    stack:'s'
+  }));
+  new Chart(document.getElementById('chart'),{
+    type:'bar',
+    data:{labels,datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      scales:{x:{stacked:true},y:{stacked:true,grid:{color:'#EEECE5'},ticks:{precision:0}}},
+      plugins:{legend:{labels:{font:{family:'IBM Plex Sans'}}}}}
+  });
+
+  // таблица
+  const thead=document.getElementById('thead');
+  thead.innerHTML='<th>Месяц</th>'+data.brands.map(b=>'<th>'+b+'</th>').join('')+'<th>Итого</th>';
+  const tb=document.getElementById('tbody');tb.innerHTML='';
+  const totals={};data.brands.forEach(b=>totals[b]=0);let grand=0;
+  data.months.forEach(m=>{
+    let html='<td>'+m.month+'</td>';
+    data.brands.forEach(b=>{const v=m.values[b]||0;totals[b]+=v;html+='<td>'+int(v)+'</td>';});
+    html+='<td class="tcol">'+int(m.total)+'</td>';grand+=m.total;
+    const tr=document.createElement('tr');tr.innerHTML=html;tb.appendChild(tr);
+  });
+  let ft='<td>Итого</td>';data.brands.forEach(b=>ft+='<td>'+int(totals[b])+'</td>');ft+='<td>'+int(grand)+'</td>';
+  const tr=document.createElement('tr');tr.className='total';tr.innerHTML=ft;tb.appendChild(tr);
+}
+
+load();
+</script>
+</body>
+</html>
