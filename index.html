@@ -10,120 +10,74 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
-    --coal: #141414;
-    --paper: #F7F6F2;
-    --yellow: #FFD400;
-    --blue: #2456D6;
-    --grey: #8A8A84;
-    --line: #E3E1DA;
-    --card: #FFFFFF;
+    --coal: #141414; --paper: #F7F6F2; --yellow: #FFD400;
+    --blue: #2456D6; --grey: #8A8A84; --line: #E3E1DA; --card: #FFFFFF;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background: var(--paper);
-    color: var(--coal);
-    min-height: 100vh;
-  }
-  .num { font-family: 'IBM Plex Mono', monospace; }
+  body { font-family: 'IBM Plex Sans', sans-serif; background: var(--paper); color: var(--coal); min-height: 100vh; }
 
-  /* ---------- шапка ---------- */
   header {
-    background: var(--coal);
-    color: #fff;
-    padding: 20px 24px;
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
+    background: var(--coal); color: #fff; padding: 20px 24px;
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;
   }
-  header h1 { font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+  header h1 { font-size: 17px; font-weight: 600; }
   header h1 span { color: var(--yellow); }
   #updated { font-size: 12px; color: #9a9a94; }
 
   .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 24px 60px; }
 
-  /* ---------- период ---------- */
-  .periods { display: flex; gap: 8px; margin-bottom: 20px; }
-  .periods button {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px; font-weight: 600;
-    background: transparent;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 7px 16px;
-    cursor: pointer;
-    color: var(--coal);
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .controls button, .controls input[type=date] {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 14px; cursor: pointer; color: var(--coal);
   }
-  .periods button.active {
-    background: var(--coal);
-    color: var(--yellow);
-    border-color: var(--coal);
-  }
-  .periods .refresh { margin-left: auto; color: var(--grey); }
+  .controls input[type=date] { cursor: auto; padding: 6px 10px; }
+  .controls button.active { background: var(--coal); color: var(--yellow); border-color: var(--coal); }
+  .controls .sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+  .controls .refresh { margin-left: auto; color: var(--grey); background: transparent; }
 
-  /* ---------- KPI ---------- */
-  .kpis {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
-    margin-bottom: 24px;
+  .accounts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .accounts button {
+    font-size: 13px; font-weight: 600; font-family: 'IBM Plex Sans', sans-serif;
+    background: transparent; border: 1px solid var(--line); border-radius: 20px;
+    padding: 6px 16px; cursor: pointer; color: var(--coal);
   }
-  .kpi {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
+  .accounts button.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 24px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
   .kpi .label { font-size: 12px; color: var(--grey); margin-bottom: 6px; }
   .kpi .value { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; }
   .kpi.main { border-top: 3px solid var(--yellow); }
   .kpi.blue { border-top: 3px solid var(--blue); }
 
-  /* ---------- блоки ---------- */
-  .block {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 18px;
-    margin-bottom: 24px;
-  }
+  .block { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 24px; }
   .block h2 { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
   .chart-box { position: relative; height: 280px; }
 
-  /* ---------- таблица ---------- */
   .table-scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
   th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); }
   th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 180px; }
-  th {
-    font-size: 11px; font-weight: 600; color: var(--grey);
-    text-transform: uppercase; letter-spacing: .04em;
-  }
+  th { font-size: 11px; font-weight: 600; color: var(--grey); text-transform: uppercase; letter-spacing: .04em; }
   td { font-family: 'IBM Plex Mono', monospace; }
   td:first-child { font-family: 'IBM Plex Sans', sans-serif; font-weight: 500; }
+  td:first-child small { display: block; color: var(--grey); font-weight: 400; }
   tr.total td { font-weight: 600; border-top: 2px solid var(--coal); border-bottom: none; }
 
-  /* ---------- статусы ---------- */
   #status { padding: 40px 0; text-align: center; color: var(--grey); font-size: 14px; }
   #status.error { color: #B33A2B; }
+  #warnings { font-size: 12px; color: #B33A2B; margin-bottom: 14px; }
 
-  /* ---------- пароль ---------- */
-  #gate {
-    position: fixed; inset: 0; background: var(--coal);
-    display: flex; align-items: center; justify-content: center; z-index: 10;
-  }
-  #gate form { text-align: center; }
+  #gate { position: fixed; inset: 0; background: var(--coal); display: flex; align-items: center; justify-content: center; z-index: 10; }
   #gate input {
-    font-family: 'IBM Plex Mono', monospace; font-size: 15px;
-    padding: 10px 14px; border: none; border-radius: 6px; outline: none;
-    text-align: center; width: 220px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 15px; padding: 10px 14px;
+    border: none; border-radius: 6px; outline: none; text-align: center; width: 220px;
   }
   #gate button {
-    display: block; margin: 12px auto 0;
-    font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600;
-    background: var(--yellow); color: var(--coal);
+    display: block; margin: 12px auto 0; font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px; font-weight: 600; background: var(--yellow); color: var(--coal);
     border: none; border-radius: 6px; padding: 9px 24px; cursor: pointer;
   }
   @media (max-width: 600px) {
@@ -147,12 +101,19 @@
 </header>
 
 <div class="wrap">
-  <div class="periods">
+  <div class="controls">
     <button data-days="7">7 дней</button>
     <button data-days="14">14 дней</button>
     <button data-days="30" class="active">30 дней</button>
-    <button class="refresh" onclick="loadData(currentDays, true)">Обновить</button>
+    <span class="sep"></span>
+    <input type="date" id="dateFrom">
+    <input type="date" id="dateTo">
+    <button id="applyRange">Показать</button>
+    <button class="refresh" id="btnRefresh">Обновить</button>
   </div>
+
+  <div class="accounts" id="accounts"></div>
+  <div id="warnings"></div>
 
   <div id="status">Загрузка…</div>
 
@@ -189,13 +150,15 @@
 <script>
 /* ================= НАСТРОЙКИ ================= */
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';
-const PASSWORD = 'proznanie';                       // смените пароль
+const PASSWORD = 'proznanie';
 /* ============================================= */
 
-let currentDays = 30;
+let lastData = null;      // ответ бэкенда целиком
+let currentAccount = 'all';
+let currentQuery = 'days=30';
 let chart = null;
 
-/* ---------- пароль (sessionStorage, как в общем index) ---------- */
+/* ---------- пароль ---------- */
 if (sessionStorage.getItem('fb_dash_auth') === '1') {
   document.getElementById('gate').style.display = 'none';
 }
@@ -211,31 +174,79 @@ function checkPass(e) {
   return false;
 }
 
-/* ---------- переключение периода ---------- */
-document.querySelectorAll('.periods button[data-days]').forEach(btn => {
+/* ---------- период: пресеты ---------- */
+document.querySelectorAll('.controls button[data-days]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.periods button[data-days]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    loadData(parseInt(btn.dataset.days, 10));
+    setActivePreset(btn);
+    currentQuery = 'days=' + btn.dataset.days;
+    loadData();
   });
 });
 
+function setActivePreset(btn) {
+  document.querySelectorAll('.controls button[data-days]').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+/* ---------- период: произвольный ---------- */
+document.getElementById('applyRange').addEventListener('click', () => {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('Укажите обе даты'); return; }
+  if (from > to) { alert('Дата начала позже даты конца'); return; }
+  setActivePreset(null);
+  currentQuery = 'since=' + from + '&until=' + to;
+  loadData();
+});
+
+document.getElementById('btnRefresh').addEventListener('click', () => loadData(true));
+
+/* ---------- фильтр аккаунтов ---------- */
+function renderAccountChips(accounts) {
+  const box = document.getElementById('accounts');
+  box.innerHTML = '';
+  if (!accounts || accounts.length < 2) return; // один кабинет — фильтр не нужен
+  const all = [{ id: 'all', name: 'Все аккаунты' }, ...accounts];
+  all.forEach(a => {
+    const b = document.createElement('button');
+    b.textContent = a.name;
+    b.dataset.id = a.id;
+    if (a.id === currentAccount) b.classList.add('active');
+    b.addEventListener('click', () => {
+      currentAccount = a.id;
+      box.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      render();
+    });
+    box.appendChild(b);
+  });
+}
+
 /* ---------- загрузка ---------- */
-async function loadData(days, force) {
-  currentDays = days;
+async function loadData(force) {
   const status = document.getElementById('status');
   const content = document.getElementById('content');
   status.style.display = 'block';
   status.className = '';
   status.textContent = 'Загрузка…';
   content.style.display = 'none';
+  document.getElementById('warnings').textContent = '';
 
   try {
-    const url = GAS_URL + '?days=' + days + (force ? '&nocache=1' : '');
-    const resp = await fetch(url);
+    const resp = await fetch(GAS_URL + '?' + currentQuery + (force ? '&nocache=1' : ''));
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
-    render(data);
+    lastData = data;
+
+    // если выбранный аккаунт исчез из ответа — сброс на «все»
+    if (currentAccount !== 'all' && !(data.accounts || []).some(a => a.id === currentAccount)) {
+      currentAccount = 'all';
+    }
+    renderAccountChips(data.accounts);
+    if (data.warnings) {
+      document.getElementById('warnings').textContent = 'Частично: ' + data.warnings.join(' | ');
+    }
+    render();
     status.style.display = 'none';
     content.style.display = 'block';
   } catch (err) {
@@ -248,15 +259,17 @@ async function loadData(days, force) {
 const fmtInt = n => n.toLocaleString('ru-RU');
 const fmtMoney = (n, cur) => n.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' ' + cur;
 
-/* ---------- отрисовка ---------- */
-function render(data) {
+/* ---------- отрисовка (с учётом фильтра аккаунта) ---------- */
+function render() {
+  const data = lastData;
   const cur = data.currency;
-  const rows = data.rows;
+  const rows = currentAccount === 'all'
+    ? data.rows
+    : data.rows.filter(r => r.account_id === currentAccount);
 
   document.getElementById('updated').textContent =
-    'Обновлено: ' + new Date(data.updated).toLocaleString('ru-RU');
+    data.since + ' — ' + data.until + ' · обновлено ' + new Date(data.updated).toLocaleString('ru-RU');
 
-  /* итоги */
   const t = { spend: 0, impressions: 0, clicks: 0, leads: 0, messages: 0 };
   rows.forEach(r => { for (const k in t) t[k] += r[k]; });
 
@@ -271,10 +284,9 @@ function render(data) {
   /* по дням */
   const byDay = {};
   rows.forEach(r => {
-    if (!byDay[r.date]) byDay[r.date] = { spend: 0, leads: 0, messages: 0 };
+    if (!byDay[r.date]) byDay[r.date] = { spend: 0, conv: 0 };
     byDay[r.date].spend += r.spend;
-    byDay[r.date].leads += r.leads;
-    byDay[r.date].messages += r.messages;
+    byDay[r.date].conv += r.leads + r.messages;
   });
   const days = Object.keys(byDay).sort();
   const labels = days.map(d => d.slice(8, 10) + '.' + d.slice(5, 7));
@@ -284,17 +296,10 @@ function render(data) {
     data: {
       labels,
       datasets: [
-        {
-          type: 'bar', label: 'Расход, ' + cur,
-          data: days.map(d => byDay[d].spend),
-          backgroundColor: '#FFD400', borderRadius: 3, yAxisID: 'y'
-        },
-        {
-          type: 'line', label: 'Лиды + переписки',
-          data: days.map(d => byDay[d].leads + byDay[d].messages),
-          borderColor: '#2456D6', backgroundColor: '#2456D6',
-          tension: .3, pointRadius: 3, yAxisID: 'y1'
-        }
+        { type: 'bar', label: 'Расход, ' + cur, data: days.map(d => byDay[d].spend),
+          backgroundColor: '#FFD400', borderRadius: 3, yAxisID: 'y' },
+        { type: 'line', label: 'Лиды + переписки', data: days.map(d => byDay[d].conv),
+          borderColor: '#2456D6', backgroundColor: '#2456D6', tension: .3, pointRadius: 3, yAxisID: 'y1' }
       ]
     },
     options: {
@@ -311,19 +316,21 @@ function render(data) {
   const byCamp = {};
   rows.forEach(r => {
     if (!byCamp[r.campaign_id]) {
-      byCamp[r.campaign_id] = { name: r.campaign_name, spend: 0, impressions: 0, clicks: 0, leads: 0, messages: 0 };
+      byCamp[r.campaign_id] = { name: r.campaign_name, account: r.account_name,
+        spend: 0, impressions: 0, clicks: 0, leads: 0, messages: 0 };
     }
     const c = byCamp[r.campaign_id];
     c.spend += r.spend; c.impressions += r.impressions; c.clicks += r.clicks;
     c.leads += r.leads; c.messages += r.messages;
   });
 
+  const showAccount = currentAccount === 'all' && (data.accounts || []).length > 1;
   const campaigns = Object.values(byCamp).sort((a, b) => b.spend - a.spend);
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
 
   const rowHtml = c => `
-    <td>${c.name}</td>
+    <td>${c.name}${showAccount && c.account ? '<small>' + c.account + '</small>' : ''}</td>
     <td>${fmtMoney(c.spend, cur)}</td>
     <td>${fmtInt(c.impressions)}</td>
     <td>${fmtInt(c.clicks)}</td>
@@ -341,11 +348,11 @@ function render(data) {
 
   const total = document.createElement('tr');
   total.className = 'total';
-  total.innerHTML = rowHtml({ name: 'Итого', ...t });
+  total.innerHTML = rowHtml({ name: 'Итого', account: '', ...t });
   tbody.appendChild(total);
 }
 
-loadData(30);
+loadData();
 </script>
 </body>
 </html>
