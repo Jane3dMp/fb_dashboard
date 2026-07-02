@@ -160,6 +160,17 @@ let currentPipe = null;
 let currentSeg = 'total';
 let winStages = {};  // pipeline -> Set выбранных стадий (в памяти сессии)
 
+// Успешная стадия по каждой воронке (подтверждено по данным). Предотмечается автоматически.
+const DEFAULT_WIN = {
+  'Каникулы': 'Внесена предоплата',
+  'Абонементы': 'На абонементе',
+  'Регулярные занятия': 'Прошёл пробное',
+  'Интенсивы': 'Оплачено',
+  'Детали': 'Предоплата получена',
+  'Мастерская': 'Успешно реализовано',
+  'Нейропсихолог': 'Успешно реализовано'
+};
+
 if (sessionStorage.getItem('fb_dash_auth') === '1') document.getElementById('gate').style.display='none';
 function checkPass(e){e.preventDefault();
   if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
@@ -203,7 +214,12 @@ function renderFunnel(){
   const stages=data.pipelines[currentPipe]||[];
   const box=document.getElementById('funnel'); box.innerHTML='';
   const max=Math.max(1,...stages.map(fld));
-  if(!winStages[currentPipe]) winStages[currentPipe]=new Set();
+  if(!winStages[currentPipe]){
+    winStages[currentPipe]=new Set();
+    // предотметить стадию-успех по карте, если она есть среди стадий воронки
+    const def=DEFAULT_WIN[currentPipe];
+    if(def && stages.some(s=>s.stage===def)) winStages[currentPipe].add(def);
+  }
   const wins=winStages[currentPipe];
 
   stages.forEach(s=>{
