@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Instagram-канал — Прознание / CODDY</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{--coal:#141414;--paper:#F7F6F2;--yellow:#FFD400;--blue:#2456D6;--grey:#8A8A84;--line:#E3E1DA;--card:#FFFFFF}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--coal);min-height:100vh}
+  header{background:var(--coal);color:#fff;padding:20px 24px}
+  header h1{font-size:17px;font-weight:600}
+  header h1 span{color:var(--yellow)}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
+  .note{background:#FFF8DC;border:1px solid #F0E4A8;border-radius:8px;padding:12px 14px;font-size:12px;color:#6b5d1a;margin-bottom:20px;line-height:1.5}
+  .block{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:24px}
+  .block h2{font-size:14px;font-weight:600;margin-bottom:14px}
+  .chart-box{position:relative;height:300px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:11px;font-weight:600;color:var(--grey);text-transform:uppercase;letter-spacing:.04em}
+  td{font-family:'IBM Plex Mono',monospace}
+  tr.total td{font-weight:600;border-top:2px solid var(--coal);border-bottom:none}
+  #status{padding:40px 0;text-align:center;color:var(--grey)}
+  #status.error{color:#B33A2B}
+  #gate{position:fixed;inset:0;background:var(--coal);display:flex;align-items:center;justify-content:center;z-index:10}
+  #gate input{font-family:'IBM Plex Mono',monospace;font-size:15px;padding:10px 14px;border:none;border-radius:6px;text-align:center;width:220px}
+  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--coal);border:none;border-radius:6px;padding:9px 24px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="gate"><form onsubmit="return checkPass(event)">
+  <input type="password" id="passInput" placeholder="Пароль" autofocus>
+  <button type="submit">Войти</button>
+</form></div>
+
+<header><h1>Instagram-канал <span>·</span> расход и заявки по месяцам</h1></header>
+
+<div class="wrap">
+  <div class="note">
+    Сопоставление на уровне <b>канала Instagram целиком</b>: расход всей IG-рекламы из Meta
+    против заявок из amoCRM с источником «Instagram». Это не привязка к конкретным кампаниям
+    (в данных amoCRM её нет) и не выручка в деньгах (суммы оплат — в Alpha, подключим позже).
+    «Успешно» = заявки, дошедшие до стадии «Успешно реализовано».
+  </div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div class="block">
+      <h2>Расход и заявки Instagram по месяцам</h2>
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+    </div>
+    <div class="block">
+      <h2>Помесячно</h2>
+      <table>
+        <thead><tr><th>Месяц</th><th>Расход, $</th><th>Заявки IG</th><th>Успешно</th><th>Цена заявки, $</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ====== НАСТРОЙКИ ====== */
+const GAS_URL = 'ВСТАВЬТЕ_URL_GAS';   // тот же /exec
+const PASSWORD = 'proznanie';
+/* ======================= */
+
+if(sessionStorage.getItem('fb_dash_auth')==='1') document.getElementById('gate').style.display='none';
+function checkPass(e){e.preventDefault();
+  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
+  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
+  return false;}
+
+const money=n=>Number(n||0).toLocaleString('ru-RU',{maximumFractionDigits:2});
+const int=n=>Number(n||0).toLocaleString('ru-RU');
+
+async function load(){
+  const s=document.getElementById('status');
+  try{
+    const resp=await fetch(GAS_URL+'?view=channel');
+    const data=await resp.json();
+    if(data.error) throw new Error(data.error);
+    if(!data.months||!data.months.length) throw new Error('Нет данных. Запустите buildChannel.');
+    render(data.months);
+    s.style.display='none';
+    document.getElementById('content').style.display='block';
+  }catch(err){s.className='error';s.textContent='Ошибка: '+err.message;}
+}
+
+function render(months){
+  const labels=months.map(m=>m.month);
+  new Chart(document.getElementById('chart'),{
+    data:{labels,datasets:[
+      {type:'bar',label:'Расход, $',data:months.map(m=>m.spend),backgroundColor:'#FFD400',borderRadius:3,yAxisID:'y'},
+      {type:'line',label:'Заявки IG',data:months.map(m=>m.leads),borderColor:'#2456D6',backgroundColor:'#2456D6',tension:.3,yAxisID:'y1'},
+      {type:'line',label:'Успешно',data:months.map(m=>m.won),borderColor:'#2E7D46',backgroundColor:'#2E7D46',tension:.3,yAxisID:'y1'}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      scales:{y:{position:'left',grid:{color:'#EEECE5'}},y1:{position:'right',grid:{display:false},ticks:{precision:0}}},
+      plugins:{legend:{labels:{font:{family:'IBM Plex Sans'}}}}}
+  });
+
+  const tb=document.getElementById('tbody');tb.innerHTML='';
+  let tSpend=0,tLeads=0,tWon=0;
+  months.forEach(m=>{
+    tSpend+=Number(m.spend||0);tLeads+=Number(m.leads||0);tWon+=Number(m.won||0);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${m.month}</td><td>${money(m.spend)}</td><td>${int(m.leads)}</td><td>${int(m.won)}</td><td>${m.cpl?money(m.cpl):'—'}</td>`;
+    tb.appendChild(tr);
+  });
+  const tr=document.createElement('tr');tr.className='total';
+  tr.innerHTML=`<td>Итого</td><td>${money(tSpend)}</td><td>${int(tLeads)}</td><td>${int(tWon)}</td><td>${tLeads?money(tSpend/tLeads):'—'}</td>`;
+  tb.appendChild(tr);
+}
+
+load();
+</script>
+</body>
+</html>
