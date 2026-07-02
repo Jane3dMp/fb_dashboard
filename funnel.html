@@ -17,6 +17,10 @@
   header{background:var(--coal);color:#fff;padding:20px 24px;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:12px}
   header h1{font-size:17px;font-weight:600}
   header h1 span{color:var(--yellow)}
+  nav.dashnav{background:#1f1f1f;padding:0 24px;display:flex;gap:4px;border-bottom:1px solid #2c2c2c}
+  nav.dashnav a{color:#b8b8b2;font-size:13px;font-weight:600;text-decoration:none;padding:12px 16px;border-bottom:2px solid transparent}
+  nav.dashnav a:hover{color:#fff}
+  nav.dashnav a.active{color:var(--yellow);border-bottom-color:var(--yellow)}
   .wrap{max-width:1000px;margin:0 auto;padding:24px 24px 60px}
 
   .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
@@ -62,6 +66,11 @@
   <h1>Воронка <span>·</span> Прознание / CODDY</h1>
   <div id="updated" style="font-size:12px;color:#9a9a94"></div>
 </header>
+<nav class="dashnav">
+  <a href="index.html">Расход</a>
+  <a href="funnel.html" class="active">Воронка</a>
+  <a href="channel.html">Instagram-канал</a>
+</nav>
 
 <div class="wrap">
   <div id="status">Загрузка…</div>
