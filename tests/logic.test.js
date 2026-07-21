@@ -30,7 +30,8 @@ vm.runInContext(
   sandbox
 );
 
-const { joinClicksToLeads_, aggregateByAd_ } = sandbox;
+const joinClicksToLeads_ = sandbox.pplJoinClicksToLeads_;
+const aggregateByAd_ = sandbox.pplAggregateByAd_;
 
 /* ---------- мини-раннер ---------- */
 

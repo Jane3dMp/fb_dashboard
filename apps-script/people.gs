@@ -2,9 +2,13 @@
  * Сквозная аналитика: склейка «клик по объявлению → человек → сделка → деньги».
  *
  * Этот файл добавляется в СУЩЕСТВУЮЩИЙ проект Apps Script (тот, что уже
- * отдаёт дашбордам JSON). В его doGet нужно добавить ветку:
+ * отдаёт дашбордам JSON). В его doGet нужно добавить ветку в том же стиле,
+ * что и остальные:
  *
- *     if (e.parameter.view === 'people') return json_(buildPeople(e.parameter));
+ *     if (p.view === 'people') {
+ *       return ContentService.createTextOutput(JSON.stringify(buildPeople(p)))
+ *         .setMimeType(ContentService.MimeType.JSON);
+ *     }
  *
  * Три источника, которые здесь сходятся:
  *   1. лист «Клики»  — кто кликнул и по какому объявлению (пишет webhook.gs)
@@ -12,12 +16,18 @@
  *   3. Meta Ads API  — сколько денег стоило это объявление
  *
  * --- Настройка (Свойства скрипта) ---
- *   CLICKS_SHEET_ID   — таблица, в которую пишет webhook.gs
- *   AMO_SUBDOMAIN     — поддомен amoCRM (без .amocrm.ru)
- *   AMO_TOKEN         — долгоживущий токен доступа
- *   AMO_IGSID_FIELD   — id пользовательского поля контакта с IGSID (см. ниже)
- *   META_TOKEN        — токен Meta Ads с доступом к ads_read
- *   META_ACCOUNTS     — id кабинетов через запятую, в формате act_123,act_456
+ * Все нужные свойства в проекте уже есть и используются другими файлами:
+ *   SHEET_ID        — таблица, в неё же webhook.gs пишет лист «Клики»
+ *   AMO_SUBDOMAIN, AMO_TOKEN — доступ к amoCRM
+ *   FB_TOKEN, AD_ACCOUNTS    — доступ к Meta Ads
+ *
+ * Добавить нужно только одно, и то опционально:
+ *   AMO_IGSID_FIELD — id пользовательского поля контакта с IGSID (см. ниже)
+ *
+ * Сделки берутся напрямую из amoCRM, а не из витрины build_mart: витрина
+ * агрегирует, а здесь нужен каждый лид поимённо. Если витрину когда-нибудь
+ * расширят до уровня отдельных сделок, этот запрос можно будет заменить
+ * чтением листа.
  */
 
 /** Сделка считается выигранной/проигранной по системным статусам amoCRM. */
@@ -31,22 +41,22 @@ const AMO_LOST = 143;
 const TIME_MATCH_WINDOW_H = 6;
 
 function buildPeople(params) {
-  const until = params.until || isoDate_(new Date());
-  const since = params.since || isoDate_(daysAgo_(Number(params.days) || 30));
+  const until = params.until || pplIsoDate_(new Date());
+  const since = params.since || pplIsoDate_(pplDaysAgo_(Number(params.days) || 30));
 
-  const clicks = readClicks_(since, until);
-  const leads = fetchAmoLeads_(since);
-  const spendByAd = fetchAdSpend_(since, until);
+  const clicks = pplReadClicks_(since, until);
+  const leads = pplFetchAmoLeads_(since);
+  const spendByAd = pplFetchAdSpend_(since, until);
 
-  const people = joinClicksToLeads_(clicks, leads);
-  const ads = aggregateByAd_(people, spendByAd);
+  const people = pplJoinClicksToLeads_(clicks, leads);
+  const ads = pplAggregateByAd_(people, spendByAd);
 
   return {
     view: 'people',
     since: since,
     until: until,
     updated: new Date().toISOString(),
-    matching: matchingMode_(),
+    matching: pplMatchingMode_(),
     people: people,
     ads: ads
   };
@@ -54,8 +64,8 @@ function buildPeople(params) {
 
 /* ==================== 1. Клики ==================== */
 
-function readClicks_(since, until) {
-  const sh = SpreadsheetApp.openById(prop_('CLICKS_SHEET_ID')).getSheetByName('Клики');
+function pplReadClicks_(since, until) {
+  const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName('Клики');
   if (!sh || sh.getLastRow() < 2) return [];
 
   const values = sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues();
@@ -77,8 +87,8 @@ function readClicks_(since, until) {
 /* ==================== 2. amoCRM ==================== */
 
 /** Сделки, созданные начиная с since, вместе с контактами. */
-function fetchAmoLeads_(since) {
-  const base = 'https://' + prop_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/leads';
+function pplFetchAmoLeads_(since) {
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/leads';
   const from = Math.floor(new Date(since + 'T00:00:00Z').getTime() / 1000);
   const out = [];
 
@@ -86,7 +96,7 @@ function fetchAmoLeads_(since) {
     const url = base + '?limit=250&page=' + page +
       '&with=contacts&filter[created_at][from]=' + from;
     const resp = UrlFetchApp.fetch(url, {
-      headers: { Authorization: 'Bearer ' + prop_('AMO_TOKEN') },
+      headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') },
       muteHttpExceptions: true
     });
     // 204 — страницы кончились, это штатный конец обхода, не ошибка
@@ -96,13 +106,13 @@ function fetchAmoLeads_(since) {
     }
     const body = JSON.parse(resp.getContentText());
     const chunk = (body._embedded && body._embedded.leads) || [];
-    chunk.forEach(function (l) { out.push(normalizeLead_(l)); });
+    chunk.forEach(function (l) { out.push(pplNormalizeLead_(l)); });
     if (chunk.length < 250) break;
   }
-  return enrichWithContacts_(out);
+  return pplEnrichWithContacts_(out);
 }
 
-function normalizeLead_(l) {
+function pplNormalizeLead_(l) {
   return {
     id: l.id,
     name: l.name || '',
@@ -124,7 +134,7 @@ function normalizeLead_(l) {
  * молча уходим на сопоставление по времени: лучше приблизительный ответ
  * с честной пометкой, чем пустая страница.
  */
-function enrichWithContacts_(leads) {
+function pplEnrichWithContacts_(leads) {
   const fieldId = Number(PropertiesService.getScriptProperties().getProperty('AMO_IGSID_FIELD') || 0);
   if (!fieldId) return leads;
 
@@ -137,10 +147,10 @@ function enrichWithContacts_(leads) {
   const igsidByContact = {};
   for (let i = 0; i < ids.length; i += 200) {
     const batch = ids.slice(i, i + 200);
-    const url = 'https://' + prop_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/contacts?limit=250' +
+    const url = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/contacts?limit=250' +
       batch.map(function (id) { return '&filter[id][]=' + id; }).join('');
     const resp = UrlFetchApp.fetch(url, {
-      headers: { Authorization: 'Bearer ' + prop_('AMO_TOKEN') },
+      headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') },
       muteHttpExceptions: true
     });
     if (resp.getResponseCode() !== 200) continue;
@@ -165,17 +175,24 @@ function enrichWithContacts_(leads) {
 
 /* ==================== 3. Meta Ads ==================== */
 
-/** Расход по каждому объявлению за период. */
-function fetchAdSpend_(since, until) {
-  const accounts = prop_('META_ACCOUNTS').split(',').map(function (s) { return s.trim(); });
+/**
+ * Расход по каждому объявлению за период.
+ *
+ * AD_ACCOUNTS в этом проекте хранится в формате «id:Название,id:Название»,
+ * поэтому берём часть до двоеточия и добавляем префикс act_.
+ */
+function pplFetchAdSpend_(since, until) {
+  const accounts = pplProp_('AD_ACCOUNTS').split(',').map(function (s) {
+    return 'act_' + s.split(':')[0].trim();
+  });
   const spend = {};
 
   accounts.forEach(function (acct) {
-    if (!acct) return;
-    const url = 'https://graph.facebook.com/v21.0/' + acct + '/insights' +
+    if (acct === 'act_') return;
+    const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
       '?level=ad&fields=ad_id,ad_name,campaign_name,spend,clicks,impressions' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
-      '&limit=500&access_token=' + encodeURIComponent(prop_('META_TOKEN'));
+      '&limit=500&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() !== 200) return; // кабинет мог отвалиться по правам — не роняем всё
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
@@ -193,7 +210,7 @@ function fetchAdSpend_(since, until) {
 
 /* ==================== 4. Склейка ==================== */
 
-function matchingMode_() {
+function pplMatchingMode_() {
   return PropertiesService.getScriptProperties().getProperty('AMO_IGSID_FIELD')
     ? 'igsid' : 'time';
 }
@@ -215,7 +232,7 @@ function matchingMode_() {
  * неоднозначное. Пусть на дашборде будет видно, сколько данных
  * получено приблизительно.
  */
-function joinClicksToLeads_(clicks, leads) {
+function pplJoinClicksToLeads_(clicks, leads) {
   const byIgsid = {};
   leads.forEach(function (l) { if (l.igsid) byIgsid[l.igsid] = l; });
 
@@ -267,7 +284,7 @@ function joinClicksToLeads_(clicks, leads) {
 }
 
 /** Сводка по объявлениям: сколько стоило и что принесло. */
-function aggregateByAd_(people, spendByAd) {
+function pplAggregateByAd_(people, spendByAd) {
   const acc = {};
   people.forEach(function (p) {
     if (!acc[p.ad_id]) acc[p.ad_id] = { ad_id: p.ad_id, wrote: 0, deals: 0, won: 0, revenue: 0 };
@@ -304,12 +321,11 @@ function aggregateByAd_(people, spendByAd) {
 
 /* ==================== Утилиты ==================== */
 
-function isoDate_(d) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); }
-function daysAgo_(n) { return new Date(Date.now() - n * 86400000); }
+function pplIsoDate_(d) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); }
+function pplDaysAgo_(n) { return new Date(Date.now() - n * 86400000); }
 
-// Если в проекте уже есть свой prop_ — удалить этот, Apps Script не допускает
-// две функции с одним именем в пределах проекта.
-function prop_(name) {
+// Хелперы с префиксом ppl, чтобы не столкнуться с функциями из Код.gs.
+function pplProp_(name) {
   const v = PropertiesService.getScriptProperties().getProperty(name);
   if (!v) throw new Error('Не задано свойство скрипта: ' + name);
   return v;
