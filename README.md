@@ -39,27 +39,28 @@ Meta Ads ──клик──> Instagram Direct
 
 ### Порядок внедрения
 
-**1. Приёмник кликов** (`apps-script/webhook.gs`)
+**1. Приёмник кликов** (`apps-script/webhook.gs`) — пошаговая инструкция:
+[docs/webhook-setup.md](docs/webhook-setup.md)
 
 Отдельный проект Apps Script, не тот, что отдаёт данные дашбордам.
+Свойства: `VERIFY_TOKEN`, `URL_SECRET`, `SHEET_ID`. Подключается к Instagram
+через Meta Webhooks (поле `messages`). Требует разрешения
+`instagram_manage_messages` с advanced access — тексты для заявки на App
+Review в [docs/meta-app-review.md](docs/meta-app-review.md).
 
-- Свойства скрипта: `VERIFY_TOKEN`, `URL_SECRET`, `SHEET_ID`
-- Задеплоить как веб-приложение, доступ «Все»
-- В Meta для приложения → Webhooks → Instagram → поле `messages`
-  - Callback URL: `https://script.google.com/macros/s/<ID>/exec?s=<URL_SECRET>`
-  - Verify Token: значение `VERIFY_TOKEN`
-- Нужно разрешение `instagram_manage_messages` с advanced access
+**2. Склейка** (`apps-script/people.gs`) — уже развёрнуто
 
-**2. Склейка** (`apps-script/people.gs`)
+Файл добавлен в проект Apps Script «ФБ» (deployment версии 21), в `doGet`
+дописана ветка `view=people`. Использует уже существующие свойства проекта:
+`SHEET_ID`, `AMO_SUBDOMAIN`, `AMO_TOKEN`, `FB_TOKEN`, `AD_ACCOUNTS`. Новых
+токенов не потребовалось. Формат `AD_ACCOUNTS` — `id:Название,id:Название`.
 
-Добавляется в существующий проект Apps Script. В его `doGet` дописать:
+Опционально: `AMO_IGSID_FIELD` — включает точную склейку по IGSID вместо
+запасной по времени.
 
-```js
-if (e.parameter.view === 'people') return json_(buildPeople(e.parameter));
-```
-
-Свойства скрипта: `CLICKS_SHEET_ID`, `AMO_SUBDOMAIN`, `AMO_TOKEN`,
-`META_TOKEN`, `META_ACCOUNTS`, опционально `AMO_IGSID_FIELD`.
+Проверено на живом эндпоинте: `?view=people` отдаёт таблицу объявлений с
+реальным расходом Meta; блок «люди» пуст, пока вебхук (шаг 1) не собирает
+клики. Остальные дашборды работают без изменений.
 
 **3. Точность связки**
 
@@ -79,22 +80,28 @@ if (e.parameter.view === 'people') return json_(buildPeople(e.parameter));
 Пароль больше не хранится в коде страниц: он вводится пользователем и
 уходит на бэкенд параметром `key`, а пускать или нет решает Apps Script.
 
-**Проверку на стороне бэкенда нужно включить.** Пока её нет, любой, кто
-знает адрес `/exec`, получает данные без пароля. В начало `doGet`:
+**Проверка в `doGet` уже добавлена, но выключена.** В начале `doGet`
+стоит guard:
 
 ```js
-function doGet(e) {
-  if (e.parameter.key !== PropertiesService.getScriptProperties().getProperty('DASH_KEY')) {
-    return ContentService.createTextOutput(JSON.stringify({ error: 'unauthorized' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  // ... остальной doGet
+var dashKey = PropertiesService.getScriptProperties().getProperty('DASH_KEY');
+if (dashKey && p.key !== dashKey) {
+  return ContentService.createTextOutput(JSON.stringify({ error: 'unauthorized' }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 ```
 
+Он намеренно fail-open: пока свойство `DASH_KEY` не задано, запросы проходят
+как раньше — поэтому добавление кода не сломало работающие дашборды.
+
+**Чтобы включить защиту — задайте свойство скрипта `DASH_KEY`** (значение
+придумайте сами). С этого момента `/exec` требует `?key=<DASH_KEY>`, а фронт
+уже его шлёт: пользователь вводит пароль в окно входа, и это значение должно
+совпасть с `DASH_KEY`.
+
 Это особенно важно для `people.html`: в отличие от остальных страниц, она
-показывает пофамильный список детей и родителей. До включения проверки
-выкладывать её в публичный доступ не стоит.
+показывает пофамильный список детей и родителей. **До установки `DASH_KEY`
+страница отдаёт данные любому, кто знает адрес `/exec`.**
 
 ## Локальный запуск
 
