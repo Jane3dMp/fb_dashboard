@@ -74,6 +74,7 @@
     <a href="channel.html">Instagram-канал</a>
     <a href="brands.html">Направления</a>
     <a href="kanikuly.html" class="active">Каникулы</a>
+    <a href="people.html">Путь клиента</a>
   </nav>
 </div>
 <div class="pagehead">
@@ -96,25 +97,16 @@
   </div>
 </div>
 
+<script src="assets/dash.js"></script>
 <script>
-const GAS_URL='https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';
-const PASSWORD='proznanie';
-
 let DATA=null, filterSmena='all';
-if(sessionStorage.getItem('fb_dash_auth')==='1') document.getElementById('gate').style.display='none';
-function checkPass(e){e.preventDefault();
-  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
-  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
-  return false;}
 
 const int=n=>Number(n||0).toLocaleString('ru-RU');
 
 async function load(){
   const s=document.getElementById('status');
   try{
-    const r=await fetch(GAS_URL+'?view=kanikuly');
-    DATA=await r.json();
-    if(DATA.error) throw new Error(DATA.error);
+    DATA=await api('view=kanikuly');
     if(!DATA.smeny||!DATA.smeny.length) throw new Error('Нет данных. Запустите buildKanikulySverka.');
     render();
     s.style.display='none';

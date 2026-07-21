@@ -128,6 +128,7 @@
   <a href="channel.html">Instagram-канал</a>
   <a href="brands.html" class="active">Направления</a>
   <a href="kanikuly.html">Каникулы</a>
+  <a href="people.html">Путь клиента</a>
   </nav>
 </div>
 <div class="pagehead">
@@ -157,19 +158,9 @@
   </div>
 </div>
 
+<script src="assets/dash.js"></script>
 <script>
-/* ====== НАСТРОЙКИ ====== */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';   // тот же /exec
-const PASSWORD = 'proznanie';
-/* ======================= */
-
 const COLORS = ['#2456D6','#FFD400','#C1694F','#2E7D46','#8A5CD6','#E0912F'];
-
-if(sessionStorage.getItem('fb_dash_auth')==='1') document.getElementById('gate').style.display='none';
-function checkPass(e){e.preventDefault();
-  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
-  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
-  return false;}
 
 const int=n=>Number(n||0).toLocaleString('ru-RU');
 let DATA=null, seg='all'; // all | ig | other
@@ -177,9 +168,7 @@ let DATA=null, seg='all'; // all | ig | other
 async function load(){
   const s=document.getElementById('status');
   try{
-    const resp=await fetch(GAS_URL+'?view=brands');
-    const data=await resp.json();
-    if(data.error) throw new Error(data.error);
+    const data=await api('view=brands');
     if(!data.months||!data.months.length) throw new Error('Нет данных. Запустите buildBrands.');
     DATA=data;
     render();

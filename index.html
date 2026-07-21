@@ -130,6 +130,7 @@
   <a href="channel.html">Instagram-канал</a>
   <a href="brands.html">Направления</a>
     <a href="kanikuly.html">Каникулы</a>
+    <a href="people.html">Путь клиента</a>
   </nav>
   <div id="updated"></div>
 </div>
@@ -185,32 +186,12 @@
   </div>
 </div>
 
+<script src="assets/dash.js"></script>
 <script>
-/* ================= НАСТРОЙКИ ================= */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';
-const PASSWORD = 'proznanie';
-/* ============================================= */
-
 let lastData = null;      // ответ бэкенда целиком
 let currentAccount = 'all';
 let currentQuery = 'days=30';
 let chart = null;
-
-/* ---------- пароль ---------- */
-if (sessionStorage.getItem('fb_dash_auth') === '1') {
-  document.getElementById('gate').style.display = 'none';
-}
-function checkPass(e) {
-  e.preventDefault();
-  if (document.getElementById('passInput').value === PASSWORD) {
-    sessionStorage.setItem('fb_dash_auth', '1');
-    document.getElementById('gate').style.display = 'none';
-  } else {
-    document.getElementById('passInput').value = '';
-    document.getElementById('passInput').placeholder = 'Неверный пароль';
-  }
-  return false;
-}
 
 /* ---------- период: пресеты ---------- */
 document.querySelectorAll('.controls button[data-days]').forEach(btn => {
@@ -271,9 +252,7 @@ async function loadData(force) {
   document.getElementById('warnings').textContent = '';
 
   try {
-    const resp = await fetch(GAS_URL + '?' + currentQuery + (force ? '&nocache=1' : ''));
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
+    const data = await api(currentQuery + (force ? '&nocache=1' : ''));
     lastData = data;
 
     // если выбранный аккаунт исчез из ответа — сброс на «все»

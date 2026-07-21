@@ -130,6 +130,7 @@
   <a href="channel.html">Instagram-канал</a>
   <a href="brands.html">Направления</a>
     <a href="kanikuly.html">Каникулы</a>
+    <a href="people.html">Путь клиента</a>
   </nav>
   <div id="updated"></div>
 </div>
@@ -159,12 +160,8 @@
   </div>
 </div>
 
+<script src="assets/dash.js"></script>
 <script>
-/* ============ НАСТРОЙКИ ============ */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';   // тот же /exec, но с ?view=funnel
-const PASSWORD = 'proznanie';
-/* =================================== */
-
 let data = null;
 let currentPipe = null;
 let currentSeg = 'total';
@@ -182,12 +179,6 @@ const DEFAULT_WIN = {
   'Нейропсихолог': 'Успешно реализовано'
 };
 
-if (sessionStorage.getItem('fb_dash_auth') === '1') document.getElementById('gate').style.display='none';
-function checkPass(e){e.preventDefault();
-  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
-  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
-  return false;}
-
 document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active'); currentSeg=b.dataset.seg; renderFunnel();
@@ -196,9 +187,7 @@ document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',(
 async function load(){
   const s=document.getElementById('status');
   try{
-    const resp=await fetch(GAS_URL+'?view=funnel');
-    data=await resp.json();
-    if(data.error) throw new Error(data.error);
+    data=await api('view=funnel');
     if(!data.rows||!data.rows.length) throw new Error('Нет данных воронки. Запустите buildMart.');
     // список воронок из строк
     const pipes=[...new Set(data.rows.map(r=>r.pipeline))];
