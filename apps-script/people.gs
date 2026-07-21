@@ -199,35 +199,58 @@ function matchingMode_() {
 }
 
 /**
- * Каждому клику ищем сделку.
+ * Каждому клику ищем сделку. Два прохода, и порядок принципиален.
  *
- * Точный путь — по IGSID, если поле в amoCRM настроено. Запасной — по времени:
- * берём сделки, созданные в течение TIME_MATCH_WINDOW_H после клика. Если
- * кандидат ровно один, считаем совпадением; если несколько, не гадаем и
- * помечаем как неоднозначное — пусть на дашборде будет видно, сколько
- * данных получено приблизительно.
+ * Сначала разбираем точные совпадения по IGSID и помечаем эти сделки
+ * занятыми. Только потом для оставшихся кликов работает запасной путь —
+ * по времени: сделки, созданные в течение TIME_MATCH_WINDOW_H после клика.
+ * Если сделать это в один проход, ранний клик может увести по времени
+ * сделку, которая по идентификатору принадлежит другому человеку.
+ *
+ * Запасной путь работает и когда поле IGSID настроено: пока оно заполнено
+ * не у всех (а в переходный период это norma), одного точного совпадения
+ * мало, и без времени страница осталась бы почти пустой.
+ *
+ * Если кандидатов по времени несколько — не гадаем, помечаем как
+ * неоднозначное. Пусть на дашборде будет видно, сколько данных
+ * получено приблизительно.
  */
 function joinClicksToLeads_(clicks, leads) {
   const byIgsid = {};
   leads.forEach(function (l) { if (l.igsid) byIgsid[l.igsid] = l; });
 
   const usedLeadIds = {};
-  return clicks.map(function (c) {
-    let lead = byIgsid[c.igsid] || null;
-    let how = lead ? 'igsid' : 'none';
+  const matches = new Array(clicks.length);
 
-    if (!lead && matchingMode_() === 'time') {
-      const t = new Date(c.ts).getTime();
-      const candidates = leads.filter(function (l) {
-        if (usedLeadIds[l.id]) return false;
-        const dt = new Date(l.created_at).getTime() - t;
-        return dt >= 0 && dt <= TIME_MATCH_WINDOW_H * 3600 * 1000;
-      });
-      if (candidates.length === 1) { lead = candidates[0]; how = 'time'; }
-      else if (candidates.length > 1) { how = 'ambiguous'; }
+  // проход 1 — точные совпадения
+  clicks.forEach(function (c, i) {
+    const lead = byIgsid[c.igsid];
+    if (lead && !usedLeadIds[lead.id]) {
+      usedLeadIds[lead.id] = true;
+      matches[i] = { lead: lead, how: 'igsid' };
     }
-    if (lead) usedLeadIds[lead.id] = true;
+  });
 
+  // проход 2 — по времени, из того, что осталось свободным
+  clicks.forEach(function (c, i) {
+    if (matches[i]) return;
+    const t = new Date(c.ts).getTime();
+    const candidates = leads.filter(function (l) {
+      if (usedLeadIds[l.id]) return false;
+      const dt = new Date(l.created_at).getTime() - t;
+      return dt >= 0 && dt <= TIME_MATCH_WINDOW_H * 3600 * 1000;
+    });
+    if (candidates.length === 1) {
+      usedLeadIds[candidates[0].id] = true;
+      matches[i] = { lead: candidates[0], how: 'time' };
+    } else if (candidates.length > 1) {
+      matches[i] = { lead: null, how: 'ambiguous' };
+    }
+  });
+
+  return clicks.map(function (c, i) {
+    const m = matches[i] || { lead: null, how: 'none' };
+    const lead = m.lead;
     return {
       igsid: c.igsid,
       clicked_at: c.ts,
@@ -238,7 +261,7 @@ function joinClicksToLeads_(clicks, leads) {
       amo_lead_id: lead ? lead.id : null,
       status: lead ? lead.status : 'no_deal',
       revenue: lead && lead.status === 'won' ? lead.price : 0,
-      matched: how
+      matched: m.how
     };
   });
 }
