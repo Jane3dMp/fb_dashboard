@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Путь клиента — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F5F1E8; --card:#FFFFFF; --ink:#1C1B19; --ink2:#6E6A62;
+    --yellow:#FFD93B; --yellow-soft:#FBF0C4; --line:#EBE6DB;
+    --blue:#3B5BDB; --green:#2E7D46; --red:#C0392B; --shadow:0 2px 14px rgba(28,27,25,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .num,.value,td{font-variant-numeric:tabular-nums}
+
+  .topbar{max-width:1160px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
+  .brand b{color:#C9A800}
+  nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
+  nav.dashnav a{color:var(--ink2);font-size:13px;font-weight:500;text-decoration:none;padding:9px 18px;border-radius:100px;transition:.15s}
+  nav.dashnav a:hover{color:var(--ink)}
+  nav.dashnav a.active{background:var(--ink);color:#fff}
+  #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
+
+  .pagehead{max-width:1160px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
+  .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
+
+  .wrap{max-width:1160px;margin:0 auto;padding:18px 24px 60px}
+
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .controls button{
+    font-family:'Inter',sans-serif;font-size:13px;font-weight:500;
+    background:var(--card);border:1px solid var(--line);border-radius:100px;
+    padding:8px 16px;cursor:pointer;color:var(--ink)
+  }
+  .controls button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .controls .right{margin-left:auto;color:var(--ink2)}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{background:var(--card);border-radius:20px;padding:20px 22px;box-shadow:var(--shadow)}
+  .kpi .label{font-size:13px;color:var(--ink2);margin-bottom:10px}
+  .kpi .value{font-family:'Poppins',sans-serif;font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1}
+  .kpi .sub{font-size:12px;color:var(--ink2);margin-top:6px}
+  .kpi.main{background:var(--yellow-soft)}
+  .kpi.green .value{color:var(--green)}
+
+  .block{background:var(--card);border-radius:22px;padding:24px;margin-bottom:24px;box-shadow:var(--shadow)}
+  .block h2{font-family:'Poppins',sans-serif;font-size:16px;font-weight:600;margin-bottom:18px}
+
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+  th,td{padding:11px 12px;text-align:center;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em}
+  td:first-child{font-weight:500}
+  td:first-child small{display:block;color:var(--ink2);font-weight:400}
+  tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+  td.zero{color:#CFCABE}
+
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:3px 10px;border-radius:100px}
+  .pill.won{background:#E8F5EC;color:var(--green)}
+  .pill.lost{background:#FBEAE8;color:var(--red)}
+  .pill.open{background:var(--yellow-soft);color:#6b5d1a}
+  .pill.no_deal{background:#F0ECE2;color:var(--ink2)}
+  .approx{font-size:11px;color:var(--ink2);border-bottom:1px dotted var(--ink2);cursor:help}
+
+  .note{background:var(--yellow-soft);border-radius:16px;padding:14px 18px;font-size:13px;color:#6b5d1a;margin-bottom:22px;line-height:1.55}
+  .note.warn{background:#FBEAE8;color:#8a2c20}
+
+  #status{padding:48px 0;text-align:center;color:var(--ink2);font-size:14px}
+  #status.error{color:var(--red)}
+
+  #gate{position:fixed;inset:0;background:var(--ink);display:flex;align-items:center;justify-content:center;z-index:10}
+  #gate input{font-family:'Inter',sans-serif;font-size:15px;padding:12px 16px;border:none;border-radius:12px;outline:none;text-align:center;width:230px}
+  #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--ink);border:none;border-radius:100px;padding:11px 28px;cursor:pointer}
+  @media(max-width:600px){.wrap,.pagehead,.topbar{padding-left:14px;padding-right:14px}.kpi .value{font-size:24px}.pagehead h1{font-size:24px}}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <form onsubmit="return checkPass(event)">
+    <input type="password" id="passInput" placeholder="Пароль" autofocus>
+    <button type="submit">Войти</button>
+  </form>
+</div>
+
+<div class="topbar">
+  <div class="brand">Аналитика<b>.</b></div>
+  <nav class="dashnav">
+    <a href="index.html">Расход</a>
+    <a href="funnel.html">Воронка</a>
+    <a href="channel.html">Instagram-канал</a>
+    <a href="brands.html">Направления</a>
+    <a href="kanikuly.html">Каникулы</a>
+    <a href="people.html" class="active">Путь клиента</a>
+  </nav>
+  <div id="updated"></div>
+</div>
+
+<div class="pagehead">
+  <h1>Путь клиента</h1>
+  <p>Кто кликнул по объявлению и что с ним стало дальше</p>
+</div>
+
+<div class="wrap">
+  <div class="controls">
+    <button data-days="7">7 дней</button>
+    <button data-days="30" class="active">30 дней</button>
+    <button data-days="90">90 дней</button>
+    <button class="right" id="btnNames">Показать имена</button>
+  </div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div id="matchNote"></div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="label">Кликнули</div><div class="value" id="kClicks">—</div><div class="sub">по данным Meta</div></div>
+      <div class="kpi main"><div class="label">Написали в директ</div><div class="value" id="kWrote">—</div><div class="sub" id="kWroteSub"></div></div>
+      <div class="kpi"><div class="label">Дошли до сделки</div><div class="value" id="kDeals">—</div><div class="sub" id="kDealsSub"></div></div>
+      <div class="kpi green"><div class="label">Оплатили</div><div class="value" id="kWon">—</div><div class="sub" id="kWonSub"></div></div>
+      <div class="kpi main"><div class="label">Стоимость клиента</div><div class="value" id="kCac">—</div><div class="sub">расход ÷ оплатившие</div></div>
+      <div class="kpi green"><div class="label">ROAS</div><div class="value" id="kRoas">—</div><div class="sub">выручка ÷ расход</div></div>
+    </div>
+
+    <div class="block">
+      <h2>По объявлениям</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Объявление</th><th>Расход</th><th>Клики</th><th>Написали</th>
+            <th>Сделки</th><th>Оплатили</th><th>Выручка</th><th>CAC</th><th>ROAS</th>
+          </tr></thead>
+          <tbody id="adsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Люди</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Человек</th><th>Написал</th><th>Объявление</th><th>Статус</th><th>Выручка</th><th>Связь</th>
+          </tr></thead>
+          <tbody id="peopleBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/dash.js"></script>
+<script>
+let lastData = null;
+let currentDays = 30;
+let showNames = false;
+
+document.querySelectorAll('.controls button[data-days]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.controls button[data-days]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentDays = Number(btn.dataset.days);
+    loadData();
+  });
+});
+
+document.getElementById('btnNames').addEventListener('click', () => {
+  showNames = !showNames;
+  document.getElementById('btnNames').textContent = showNames ? 'Скрыть имена' : 'Показать имена';
+  if (lastData) render();
+});
+
+async function loadData() {
+  const status = document.getElementById('status');
+  const content = document.getElementById('content');
+  status.style.display = 'block';
+  status.className = '';
+  status.textContent = 'Загрузка…';
+  content.style.display = 'none';
+
+  try {
+    lastData = await api('view=people&days=' + currentDays);
+    // Старый бэкенд про view=people ещё не знает и молча отдаёт данные
+    // по расходу — без этой проверки страница падала бы с невнятным
+    // «Cannot read properties of undefined»
+    if (!lastData || !lastData.ads || !lastData.people) {
+      throw new Error('Бэкенд не отдаёт данные сквозной аналитики. Добавьте people.gs в проект Apps Script и ветку view=people в doGet.');
+    }
+    render();
+    status.style.display = 'none';
+    content.style.display = 'block';
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Ошибка: ' + err.message;
+  }
+}
+
+const fmtInt = n => n.toLocaleString('ru-RU');
+const fmtMoney = n => n.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+
+/** Имена детей и родителей по умолчанию скрыты — страница про деньги, а не про людей. */
+function displayName(p) {
+  if (!p.name) return '—';
+  if (showNames) return p.name;
+  const parts = p.name.trim().split(/\s+/);
+  return parts.map(w => w[0].toUpperCase() + '·').join(' ');
+}
+
+const STATUS_LABEL = { won: 'Оплатил', lost: 'Отвалился', open: 'В работе', no_deal: 'Нет сделки' };
+const MATCH_LABEL = { igsid: 'точно', time: 'по времени', ambiguous: 'неоднозначно', none: '—' };
+
+function render() {
+  const d = lastData;
+  document.getElementById('updated').textContent =
+    d.since + ' — ' + d.until + ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
+
+  const t = d.ads.reduce((a, r) => ({
+    spend: a.spend + r.spend, clicks: a.clicks + r.clicks, wrote: a.wrote + r.wrote,
+    deals: a.deals + r.deals, won: a.won + r.won, revenue: a.revenue + r.revenue
+  }), { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 });
+
+  document.getElementById('kClicks').textContent = fmtInt(t.clicks);
+  document.getElementById('kWrote').textContent = fmtInt(t.wrote);
+  document.getElementById('kWroteSub').textContent = pct(t.wrote, t.clicks) + ' от кликов';
+  document.getElementById('kDeals').textContent = fmtInt(t.deals);
+  document.getElementById('kDealsSub').textContent = pct(t.deals, t.wrote) + ' от написавших';
+  document.getElementById('kWon').textContent = fmtInt(t.won);
+  document.getElementById('kWonSub').textContent = pct(t.won, t.deals) + ' от сделок';
+  document.getElementById('kCac').textContent = t.won ? fmtMoney(t.spend / t.won) : '—';
+  document.getElementById('kRoas').textContent = t.spend ? (t.revenue / t.spend).toFixed(2) + '×' : '—';
+
+  renderMatchNote(d);
+
+  const adsBody = document.getElementById('adsBody');
+  adsBody.innerHTML = '';
+  d.ads.forEach(a => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${a.ad_name || a.ad_id}${a.campaign_name ? '<small>' + a.campaign_name + '</small>' : ''}</td>
+      <td>${fmtMoney(a.spend)}</td>
+      <td>${fmtInt(a.clicks)}</td>
+      <td class="${a.wrote ? '' : 'zero'}">${fmtInt(a.wrote)}</td>
+      <td class="${a.deals ? '' : 'zero'}">${fmtInt(a.deals)}</td>
+      <td class="${a.won ? '' : 'zero'}">${fmtInt(a.won)}</td>
+      <td class="${a.revenue ? '' : 'zero'}">${fmtMoney(a.revenue)}</td>
+      <td>${a.cac === null ? '—' : fmtMoney(a.cac)}</td>
+      <td>${a.roas === null ? '—' : a.roas.toFixed(2) + '×'}</td>`;
+    adsBody.appendChild(tr);
+  });
+  const total = document.createElement('tr');
+  total.className = 'total';
+  total.innerHTML = `
+    <td>Итого</td><td>${fmtMoney(t.spend)}</td><td>${fmtInt(t.clicks)}</td>
+    <td>${fmtInt(t.wrote)}</td><td>${fmtInt(t.deals)}</td><td>${fmtInt(t.won)}</td>
+    <td>${fmtMoney(t.revenue)}</td>
+    <td>${t.won ? fmtMoney(t.spend / t.won) : '—'}</td>
+    <td>${t.spend ? (t.revenue / t.spend).toFixed(2) + '×' : '—'}</td>`;
+  adsBody.appendChild(total);
+
+  const peopleBody = document.getElementById('peopleBody');
+  peopleBody.innerHTML = '';
+  const sorted = [...d.people].sort((a, b) => b.clicked_at.localeCompare(a.clicked_at));
+  sorted.forEach(p => {
+    const tr = document.createElement('tr');
+    const ad = d.ads.find(a => a.ad_id === p.ad_id);
+    tr.innerHTML = `
+      <td>${displayName(p)}</td>
+      <td>${new Date(p.clicked_at).toLocaleDateString('ru-RU')}</td>
+      <td>${(ad && ad.ad_name) || p.ad_title || p.ad_id}</td>
+      <td><span class="pill ${p.status}">${STATUS_LABEL[p.status]}</span></td>
+      <td class="${p.revenue ? '' : 'zero'}">${p.revenue ? fmtMoney(p.revenue) : '—'}</td>
+      <td><span class="approx" title="Как сделка связана с кликом">${MATCH_LABEL[p.matched]}</span></td>`;
+    peopleBody.appendChild(tr);
+  });
+}
+
+/**
+ * Пока IGSID в amoCRM не настроен, часть связей угадана по времени.
+ * Об этом надо говорить прямо на странице, иначе приблизительные
+ * цифры незаметно начнут считаться точными.
+ */
+function renderMatchNote(d) {
+  const box = document.getElementById('matchNote');
+  const approx = d.people.filter(p => p.matched === 'time').length;
+  const bad = d.people.filter(p => p.matched === 'ambiguous').length;
+
+  if (d.matching === 'igsid' && !approx && !bad) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="note warn">
+    Связь «клик → сделка» определена точно не везде.
+    По времени сопоставлено: <b>${approx}</b>, неоднозначно: <b>${bad}</b> из ${d.people.length}.
+    Чтобы цифры стали точными, нужно записывать IGSID в поле контакта amoCRM
+    и указать его id в свойстве скрипта <b>AMO_IGSID_FIELD</b>.
+  </div>`;
+}
+
+loadData();
+</script>
+</body>
+</html>

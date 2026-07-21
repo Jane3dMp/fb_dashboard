@@ -128,6 +128,7 @@
   <a href="channel.html" class="active">Instagram-канал</a>
   <a href="brands.html">Направления</a>
     <a href="kanikuly.html">Каникулы</a>
+    <a href="people.html">Путь клиента</a>
   </nav>
 </div>
 <div class="pagehead">
@@ -160,27 +161,15 @@
   </div>
 </div>
 
+<script src="assets/dash.js"></script>
 <script>
-/* ====== НАСТРОЙКИ ====== */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';   // тот же /exec
-const PASSWORD = 'proznanie';
-/* ======================= */
-
-if(sessionStorage.getItem('fb_dash_auth')==='1') document.getElementById('gate').style.display='none';
-function checkPass(e){e.preventDefault();
-  if(document.getElementById('passInput').value===PASSWORD){sessionStorage.setItem('fb_dash_auth','1');document.getElementById('gate').style.display='none';}
-  else{document.getElementById('passInput').value='';document.getElementById('passInput').placeholder='Неверный пароль';}
-  return false;}
-
 const money=n=>Number(n||0).toLocaleString('ru-RU',{maximumFractionDigits:2});
 const int=n=>Number(n||0).toLocaleString('ru-RU');
 
 async function load(){
   const s=document.getElementById('status');
   try{
-    const resp=await fetch(GAS_URL+'?view=channel');
-    const data=await resp.json();
-    if(data.error) throw new Error(data.error);
+    const data=await api('view=channel');
     if(!data.months||!data.months.length) throw new Error('Нет данных. Запустите buildChannel.');
     render(data.months);
     s.style.display='none';
