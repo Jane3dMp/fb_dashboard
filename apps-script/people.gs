@@ -35,6 +35,14 @@ const AMO_WON = 142;
 const AMO_LOST = 143;
 
 /**
+ * Поле сделки в amoCRM, в котором лежит канал обращения («Instagram»,
+ * «Звонок» и т.п.). Ищем по названию, а не по id: id у каждого аккаунта
+ * свой, а название стабильно. Если название однажды поменяют — можно
+ * задать свойство AMO_SOURCE_FIELD с числовым id и оно победит.
+ */
+const AMO_SOURCE_FIELD_NAME = 'Источник заявки';
+
+/**
  * Окно для запасного сопоставления по времени, часы.
  * Используется только если IGSID в amoCRM недоступен.
  */
@@ -58,7 +66,8 @@ function buildPeople(params) {
     updated: new Date().toISOString(),
     matching: pplMatchingMode_(),
     people: people,
-    ads: ads
+    ads: ads,
+    channel: pplChannelSummary_(leads, pplFetchSpendByPlatform_(since, until), until)
   };
 }
 
@@ -122,8 +131,21 @@ function pplNormalizeLead_(l) {
     price: l.price || 0,
     status: l.status_id === AMO_WON ? 'won' : (l.status_id === AMO_LOST ? 'lost' : 'open'),
     contact_ids: ((l._embedded && l._embedded.contacts) || []).map(function (c) { return c.id; }),
+    source: pplLeadSource_(l),
     igsid: ''
   };
+}
+
+/** Канал обращения из пользовательского поля сделки. Пусто — значит не заполнен. */
+function pplLeadSource_(l) {
+  const override = Number(PropertiesService.getScriptProperties().getProperty('AMO_SOURCE_FIELD') || 0);
+  const fields = l.custom_fields_values || [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    const hit = override ? f.field_id === override : f.field_name === AMO_SOURCE_FIELD_NAME;
+    if (hit && f.values && f.values[0]) return String(f.values[0].value || '');
+  }
+  return '';
 }
 
 /**
@@ -206,6 +228,98 @@ function pplFetchAdSpend_(since, until) {
     });
   });
   return spend;
+}
+
+/**
+ * Расход с разбивкой по площадкам.
+ *
+ * Нужен отдельно от расхода по объявлениям: кампании Meta крутятся и в
+ * Instagram, и в Facebook, а сопоставлять мы будем с заявками, у которых
+ * в amoCRM стоит источник «Instagram». Складывать весь расход кабинета с
+ * заявками только из Instagram — значит занижать окупаемость.
+ */
+function pplFetchSpendByPlatform_(since, until) {
+  const accounts = pplProp_('AD_ACCOUNTS').split(',').map(function (s) {
+    return 'act_' + s.split(':')[0].trim();
+  });
+  const out = { instagram: 0, facebook: 0, other: 0, total: 0 };
+
+  accounts.forEach(function (acct) {
+    if (acct === 'act_') return;
+    const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
+      '?level=account&fields=spend&breakdowns=publisher_platform' +
+      '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
+      '&limit=100&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return;
+    ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
+      const v = Number(r.spend || 0);
+      const p = String(r.publisher_platform || '').toLowerCase();
+      out.total += v;
+      if (p === 'instagram') out.instagram += v;
+      else if (p === 'facebook') out.facebook += v;
+      else out.other += v;
+    });
+  });
+  return out;
+}
+
+/**
+ * Окупаемость на уровне канала: расход в Instagram против сделок, у которых
+ * в amoCRM источник — Instagram.
+ *
+ * Это огрубление: канал целиком, без разбивки по объявлениям. Разбивка
+ * требует связки «клик → человек», а её Meta отдаёт только после проверки
+ * приложения. Зато эти цифры честные и доступны сразу.
+ *
+ * Отдельно считаем выигранные сделки с нулевым бюджетом: если менеджеры не
+ * проставляют сумму, выручка окажется занижена, и об этом честнее сказать
+ * прямо на странице, чем показывать заниженный ROAS как факт.
+ */
+function pplChannelSummary_(leads, spendByPlatform, until) {
+  const inPeriod = leads.filter(function (l) { return l.created_at.slice(0, 10) <= until; });
+
+  const bySource = {};
+  inPeriod.forEach(function (l) {
+    const src = l.source || '(не указан)';
+    if (!bySource[src]) {
+      bySource[src] = { source: src, leads: 0, won: 0, lost: 0, open: 0, revenue: 0, won_without_price: 0 };
+    }
+    const s = bySource[src];
+    s.leads++;
+    if (l.status === 'won') {
+      s.won++;
+      s.revenue += l.price;
+      if (!l.price) s.won_without_price++;
+    } else if (l.status === 'lost') s.lost++;
+    else s.open++;
+  });
+
+  const sources = Object.keys(bySource).map(function (k) { return bySource[k]; })
+    .sort(function (a, b) { return b.leads - a.leads; });
+
+  // название источника могут написать по-разному, поэтому ищем по вхождению
+  const igKey = Object.keys(bySource).filter(function (k) { return /instagram/i.test(k); })[0];
+  const ig = igKey ? bySource[igKey] : { leads: 0, won: 0, lost: 0, open: 0, revenue: 0, won_without_price: 0 };
+  const spend = spendByPlatform.instagram;
+
+  return {
+    spend: spendByPlatform,
+    sources: sources,
+    source_filled: inPeriod.length ? (inPeriod.length - (bySource['(не указан)'] || { leads: 0 }).leads) / inPeriod.length : 0,
+    instagram: {
+      spend: spend,
+      leads: ig.leads,
+      won: ig.won,
+      lost: ig.lost,
+      open: ig.open,
+      revenue: ig.revenue,
+      won_without_price: ig.won_without_price,
+      cac: ig.won ? spend / ig.won : null,
+      roas: spend ? ig.revenue / spend : null,
+      conv: ig.leads ? ig.won / ig.leads : null
+    }
+  };
 }
 
 /* ==================== 4. Склейка ==================== */

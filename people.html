@@ -106,7 +106,7 @@
 
 <div class="pagehead">
   <h1>Путь клиента</h1>
-  <p>Кто кликнул по объявлению и что с ним стало дальше</p>
+  <p>Окупаемость рекламы: сколько потратили и что это принесло</p>
 </div>
 
 <div class="wrap">
@@ -120,16 +120,31 @@
   <div id="status">Загрузка…</div>
 
   <div id="content" style="display:none">
-    <div id="matchNote"></div>
-
     <div class="kpis">
-      <div class="kpi"><div class="label">Кликнули</div><div class="value" id="kClicks">—</div><div class="sub">по данным Meta</div></div>
-      <div class="kpi main"><div class="label">Написали в директ</div><div class="value" id="kWrote">—</div><div class="sub" id="kWroteSub"></div></div>
-      <div class="kpi"><div class="label">Дошли до сделки</div><div class="value" id="kDeals">—</div><div class="sub" id="kDealsSub"></div></div>
-      <div class="kpi green"><div class="label">Оплатили</div><div class="value" id="kWon">—</div><div class="sub" id="kWonSub"></div></div>
-      <div class="kpi main"><div class="label">Стоимость клиента</div><div class="value" id="kCac">—</div><div class="sub">расход ÷ оплатившие</div></div>
-      <div class="kpi green"><div class="label">ROAS</div><div class="value" id="kRoas">—</div><div class="sub">выручка ÷ расход</div></div>
+      <div class="kpi"><div class="label">Расход в Instagram</div><div class="value" id="cSpend">—</div><div class="sub" id="cSpendSub"></div></div>
+      <div class="kpi main"><div class="label">Заявок из Instagram</div><div class="value" id="cLeads">—</div><div class="sub" id="cLeadsSub"></div></div>
+      <div class="kpi green"><div class="label">Оплатили</div><div class="value" id="cWon">—</div><div class="sub" id="cWonSub"></div></div>
+      <div class="kpi green"><div class="label">Выручка</div><div class="value" id="cRevenue">—</div><div class="sub">по оплаченным сделкам</div></div>
+      <div class="kpi main"><div class="label">Стоимость клиента</div><div class="value" id="cCac">—</div><div class="sub">расход ÷ оплатившие</div></div>
+      <div class="kpi green"><div class="label">ROAS</div><div class="value" id="cRoas">—</div><div class="sub">выручка ÷ расход</div></div>
     </div>
+
+    <div id="channelNote"></div>
+
+    <div class="block">
+      <h2>По источникам заявок</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Источник</th><th>Заявок</th><th>В работе</th><th>Отвалились</th>
+            <th>Оплатили</th><th>Конверсия</th><th>Выручка</th>
+          </tr></thead>
+          <tbody id="sourcesBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="matchNote"></div>
 
     <div class="block">
       <h2>По объявлениям</h2>
@@ -144,7 +159,7 @@
       </div>
     </div>
 
-    <div class="block">
+    <div class="block" id="peopleBlock">
       <h2>Люди</h2>
       <div class="table-scroll">
         <table>
@@ -195,6 +210,9 @@ async function loadData() {
     if (!lastData || !lastData.ads || !lastData.people) {
       throw new Error('Бэкенд не отдаёт данные сквозной аналитики. Добавьте people.gs в проект Apps Script и ветку view=people в doGet.');
     }
+    if (!lastData.channel) {
+      throw new Error('Бэкенд отдаёт старую версию ответа без блока channel. Обновите people.gs и передеплойте проект.');
+    }
     render();
     status.style.display = 'none';
     content.style.display = 'block';
@@ -229,16 +247,7 @@ function render() {
     deals: a.deals + r.deals, won: a.won + r.won, revenue: a.revenue + r.revenue
   }), { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 });
 
-  document.getElementById('kClicks').textContent = fmtInt(t.clicks);
-  document.getElementById('kWrote').textContent = fmtInt(t.wrote);
-  document.getElementById('kWroteSub').textContent = pct(t.wrote, t.clicks) + ' от кликов';
-  document.getElementById('kDeals').textContent = fmtInt(t.deals);
-  document.getElementById('kDealsSub').textContent = pct(t.deals, t.wrote) + ' от написавших';
-  document.getElementById('kWon').textContent = fmtInt(t.won);
-  document.getElementById('kWonSub').textContent = pct(t.won, t.deals) + ' от сделок';
-  document.getElementById('kCac').textContent = t.won ? fmtMoney(t.spend / t.won) : '—';
-  document.getElementById('kRoas').textContent = t.spend ? (t.revenue / t.spend).toFixed(2) + '×' : '—';
-
+  renderChannel(d.channel);
   renderMatchNote(d);
 
   const adsBody = document.getElementById('adsBody');
@@ -267,6 +276,10 @@ function render() {
     <td>${t.spend ? (t.revenue / t.spend).toFixed(2) + '×' : '—'}</td>`;
   adsBody.appendChild(total);
 
+  // Пока Meta не одобрила приложение, кликов нет вообще — пустая таблица
+  // «Люди» только сбивала бы с толку, поэтому прячем весь блок.
+  document.getElementById('peopleBlock').style.display = d.people.length ? 'block' : 'none';
+
   const peopleBody = document.getElementById('peopleBody');
   peopleBody.innerHTML = '';
   const sorted = [...d.people].sort((a, b) => b.clicked_at.localeCompare(a.clicked_at));
@@ -284,16 +297,82 @@ function render() {
   });
 }
 
+/** Окупаемость канала целиком: расход в Instagram против заявок с этим источником. */
+function renderChannel(c) {
+  const ig = c.instagram;
+  document.getElementById('cSpend').textContent = fmtMoney(ig.spend);
+  document.getElementById('cSpendSub').textContent =
+    'из ' + fmtMoney(c.spend.total) + ' по всем площадкам';
+  document.getElementById('cLeads').textContent = fmtInt(ig.leads);
+  document.getElementById('cLeadsSub').textContent =
+    ig.leads ? fmtMoney(ig.spend / ig.leads) + ' за заявку' : 'нет заявок за период';
+  document.getElementById('cWon').textContent = fmtInt(ig.won);
+  document.getElementById('cWonSub').textContent = pct(ig.won, ig.leads) + ' от заявок';
+  document.getElementById('cRevenue').textContent = fmtMoney(ig.revenue);
+  document.getElementById('cCac').textContent = ig.cac === null ? '—' : fmtMoney(ig.cac);
+  document.getElementById('cRoas').textContent = ig.roas === null ? '—' : ig.roas.toFixed(2) + '×';
+
+  const body = document.getElementById('sourcesBody');
+  body.innerHTML = '';
+  c.sources.forEach(s => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${s.source}</td>
+      <td>${fmtInt(s.leads)}</td>
+      <td class="${s.open ? '' : 'zero'}">${fmtInt(s.open)}</td>
+      <td class="${s.lost ? '' : 'zero'}">${fmtInt(s.lost)}</td>
+      <td class="${s.won ? '' : 'zero'}">${fmtInt(s.won)}</td>
+      <td>${pct(s.won, s.leads)}</td>
+      <td class="${s.revenue ? '' : 'zero'}">${fmtMoney(s.revenue)}</td>`;
+    body.appendChild(tr);
+  });
+
+  renderChannelNote(c);
+}
+
 /**
- * Пока IGSID в amoCRM не настроен, часть связей угадана по времени.
- * Об этом надо говорить прямо на странице, иначе приблизительные
- * цифры незаметно начнут считаться точными.
+ * Две оговорки, без которых цифрам выше нельзя доверять вслепую:
+ * выручка занижается, если у выигранных сделок не проставлен бюджет,
+ * и вся картина смещается, если источник заполнен не у всех заявок.
+ */
+function renderChannelNote(c) {
+  const box = document.getElementById('channelNote');
+  const parts = [];
+  const ig = c.instagram;
+
+  if (ig.won_without_price) {
+    parts.push(`У <b>${ig.won_without_price}</b> из ${ig.won} оплаченных сделок не указан бюджет —
+      выручка и ROAS занижены. Чтобы цифра стала верной, суммы нужно проставлять в карточке сделки.`);
+  }
+  const filled = Math.round(c.source_filled * 100);
+  if (filled < 100) {
+    parts.push(`Источник заявки заполнен у <b>${filled}%</b> сделок за период.
+      Заявки без источника не попали ни в одну строку таблицы ниже.`);
+  }
+  box.innerHTML = parts.length ? `<div class="note warn">${parts.join('<br><br>')}</div>` : '';
+}
+
+/**
+ * Разбивки по объявлениям пока нет: Meta отдаёт связку «клик → человек»
+ * только после проверки приложения. Молча показывать нули в этих колонках
+ * нельзя — их прочитают как «реклама не сработала».
  */
 function renderMatchNote(d) {
   const box = document.getElementById('matchNote');
+
+  if (!d.people.length) {
+    box.innerHTML = `<div class="note">
+      Колонки «Написали», «Сделки», «Оплатили» и «Выручка» в таблице ниже пустые,
+      и это не значит, что реклама не работает. Связку конкретного объявления
+      с конкретной заявкой Meta начнёт присылать только после проверки приложения —
+      до этого сопоставлять нечего. Расход и клики по объявлениям при этом настоящие,
+      а окупаемость канала целиком — в блоке выше.
+    </div>`;
+    return;
+  }
+
   const approx = d.people.filter(p => p.matched === 'time').length;
   const bad = d.people.filter(p => p.matched === 'ambiguous').length;
-
   if (d.matching === 'igsid' && !approx && !bad) { box.innerHTML = ''; return; }
   box.innerHTML = `<div class="note warn">
     Связь «клик → сделка» определена точно не везде.
