@@ -223,8 +223,20 @@ async function loadData() {
 }
 
 const fmtInt = n => n.toLocaleString('ru-RU');
-const fmtMoney = n => n.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
 const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+
+/**
+ * Расход приходит из Meta, выручка — из amoCRM, и валюты у них разные.
+ * Поэтому знак валюты не хардкодим, а подставляем тот, что пришёл с данными:
+ * иначе доллары подписываются рублями и ROAS превращается в выдумку.
+ */
+const CUR_SIGN = { RUB: '₽', BYN: 'Br', USD: '$', EUR: '€', KZT: '₸', UAH: '₴' };
+const money = (n, cur) => n.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) +
+  ' ' + (CUR_SIGN[cur] || cur || '');
+const adMoney = n => money(n, lastData && lastData.channel.currency.ads);
+const amoMoney = n => money(n, lastData && lastData.channel.currency.amo);
+// в таблице объявлений все суммы — из рекламного кабинета
+const fmtMoney = adMoney;
 
 /** Имена детей и родителей по умолчанию скрыты — страница про деньги, а не про людей. */
 function displayName(p) {
@@ -300,16 +312,16 @@ function render() {
 /** Окупаемость канала целиком: расход в Instagram против заявок с этим источником. */
 function renderChannel(c) {
   const ig = c.instagram;
-  document.getElementById('cSpend').textContent = fmtMoney(ig.spend);
+  document.getElementById('cSpend').textContent = adMoney(ig.spend);
   document.getElementById('cSpendSub').textContent =
-    'из ' + fmtMoney(c.spend.total) + ' по всем площадкам';
+    'из ' + adMoney(c.spend.total) + ' по всем площадкам';
   document.getElementById('cLeads').textContent = fmtInt(ig.leads);
   document.getElementById('cLeadsSub').textContent =
-    ig.leads ? fmtMoney(ig.spend / ig.leads) + ' за заявку' : 'нет заявок за период';
+    ig.cost_per_lead === null ? 'нет заявок за период' : adMoney(ig.cost_per_lead) + ' за заявку';
   document.getElementById('cWon').textContent = fmtInt(ig.won);
   document.getElementById('cWonSub').textContent = pct(ig.won, ig.leads) + ' от заявок';
-  document.getElementById('cRevenue').textContent = fmtMoney(ig.revenue);
-  document.getElementById('cCac').textContent = ig.cac === null ? '—' : fmtMoney(ig.cac);
+  document.getElementById('cRevenue').textContent = amoMoney(ig.revenue);
+  document.getElementById('cCac').textContent = ig.cac === null ? '—' : amoMoney(ig.cac);
   document.getElementById('cRoas').textContent = ig.roas === null ? '—' : ig.roas.toFixed(2) + '×';
 
   const body = document.getElementById('sourcesBody');
@@ -323,7 +335,7 @@ function renderChannel(c) {
       <td class="${s.lost ? '' : 'zero'}">${fmtInt(s.lost)}</td>
       <td class="${s.won ? '' : 'zero'}">${fmtInt(s.won)}</td>
       <td>${pct(s.won, s.leads)}</td>
-      <td class="${s.revenue ? '' : 'zero'}">${fmtMoney(s.revenue)}</td>`;
+      <td class="${s.revenue ? '' : 'zero'}">${amoMoney(s.revenue)}</td>`;
     body.appendChild(tr);
   });
 
@@ -339,6 +351,25 @@ function renderChannelNote(c) {
   const box = document.getElementById('channelNote');
   const parts = [];
   const ig = c.instagram;
+  const cur = c.currency;
+
+  // Самое важное предупреждение: без курса CAC и ROAS не считаются вовсе.
+  // Показать их «примерно» было бы хуже, чем не показать: рублёвая выручка,
+  // делённая на долларовый расход, выглядит как отличная окупаемость.
+  if (cur.mixed_ad_accounts) {
+    parts.push(`Рекламные кабинеты ведутся в разных валютах, поэтому расход по ним
+      нельзя просто сложить. CAC и ROAS не рассчитаны.`);
+  } else if (!cur.comparable) {
+    parts.push(`Расход в рекламе указан в <b>${cur.ads || '?'}</b>, а суммы сделок в amoCRM —
+      в <b>${cur.amo || '?'}</b>. Пока курс не задан, CAC и ROAS не считаются: делить одно
+      на другое — значит получить красивое, но выдуманное число.
+      Чтобы включить расчёт, задайте свойство скрипта <b>FX_RATE</b> —
+      сколько ${cur.amo || '?'} в одном ${cur.ads || '?'}.`);
+  } else if (!cur.same) {
+    parts.push(`Расход пересчитан из <b>${cur.ads}</b> в <b>${cur.amo}</b> по курсу
+      <b>${cur.rate}</b> из свойства FX_RATE. Курс фиксированный — если он заметно
+      изменился, обновите свойство, иначе ROAS поплывёт.`);
+  }
 
   if (ig.won_without_price) {
     parts.push(`У <b>${ig.won_without_price}</b> из ${ig.won} оплаченных сделок не указан бюджет —

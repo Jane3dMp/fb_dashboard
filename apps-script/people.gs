@@ -67,7 +67,9 @@ function buildPeople(params) {
     matching: pplMatchingMode_(),
     people: people,
     ads: ads,
-    channel: pplChannelSummary_(leads, pplFetchSpendByPlatform_(since, until), until)
+    channel: pplChannelSummary_(
+      leads, pplFetchSpendByPlatform_(since, until), until, pplFetchAmoCurrency_()
+    )
   };
 }
 
@@ -242,12 +244,12 @@ function pplFetchSpendByPlatform_(since, until) {
   const accounts = pplProp_('AD_ACCOUNTS').split(',').map(function (s) {
     return 'act_' + s.split(':')[0].trim();
   });
-  const out = { instagram: 0, facebook: 0, other: 0, total: 0 };
+  const out = { instagram: 0, facebook: 0, other: 0, total: 0, currency: '', mixed_currency: false };
 
   accounts.forEach(function (acct) {
     if (acct === 'act_') return;
     const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
-      '?level=account&fields=spend&breakdowns=publisher_platform' +
+      '?level=account&fields=spend,account_currency&breakdowns=publisher_platform' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=100&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -255,6 +257,12 @@ function pplFetchSpendByPlatform_(since, until) {
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       const v = Number(r.spend || 0);
       const p = String(r.publisher_platform || '').toLowerCase();
+      const cur = String(r.account_currency || '');
+      // кабинеты могут вестись в разных валютах — тогда суммировать их нельзя
+      if (cur) {
+        if (!out.currency) out.currency = cur;
+        else if (out.currency !== cur) out.mixed_currency = true;
+      }
       out.total += v;
       if (p === 'instagram') out.instagram += v;
       else if (p === 'facebook') out.facebook += v;
@@ -262,6 +270,22 @@ function pplFetchSpendByPlatform_(since, until) {
     });
   });
   return out;
+}
+
+/**
+ * Валюта сумм в amoCRM. Нужна, чтобы не делить рубли на доллары.
+ *
+ * Не роняем расчёт, если запрос не прошёл: лучше показать суммы без
+ * ROAS, чем не показать ничего.
+ */
+function pplFetchAmoCurrency_() {
+  const url = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/account';
+  const resp = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') },
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) return '';
+  return String(JSON.parse(resp.getContentText()).currency || '').toUpperCase();
 }
 
 /**
@@ -276,7 +300,7 @@ function pplFetchSpendByPlatform_(since, until) {
  * проставляют сумму, выручка окажется занижена, и об этом честнее сказать
  * прямо на странице, чем показывать заниженный ROAS как факт.
  */
-function pplChannelSummary_(leads, spendByPlatform, until) {
+function pplChannelSummary_(leads, spendByPlatform, until, amoCurrency) {
   const inPeriod = leads.filter(function (l) { return l.created_at.slice(0, 10) <= until; });
 
   const bySource = {};
@@ -303,10 +327,29 @@ function pplChannelSummary_(leads, spendByPlatform, until) {
   const ig = igKey ? bySource[igKey] : { leads: 0, won: 0, lost: 0, open: 0, revenue: 0, won_without_price: 0 };
   const spend = spendByPlatform.instagram;
 
+  // Расход приходит из Meta, выручка — из amoCRM, и валюты у них разные.
+  // Делить одно на другое без курса нельзя: получится красивое, но
+  // бессмысленное число. Курс задаётся свойством FX_RATE — сколько единиц
+  // валюты amoCRM в одной единице валюты рекламного кабинета.
+  const adCur = spendByPlatform.currency;
+  const rate = Number(PropertiesService.getScriptProperties().getProperty('FX_RATE') || 0);
+  const sameCurrency = adCur && amoCurrency && adCur === amoCurrency;
+  const comparable = !spendByPlatform.mixed_currency && (sameCurrency || rate > 0);
+  // расход, приведённый к валюте выручки
+  const spendInAmo = sameCurrency ? spend : (rate > 0 ? spend * rate : null);
+
   return {
     spend: spendByPlatform,
     sources: sources,
     source_filled: inPeriod.length ? (inPeriod.length - (bySource['(не указан)'] || { leads: 0 }).leads) / inPeriod.length : 0,
+    currency: {
+      ads: adCur,
+      amo: amoCurrency || '',
+      same: !!sameCurrency,
+      rate: rate > 0 ? rate : null,
+      comparable: comparable,
+      mixed_ad_accounts: !!spendByPlatform.mixed_currency
+    },
     instagram: {
       spend: spend,
       leads: ig.leads,
@@ -315,8 +358,10 @@ function pplChannelSummary_(leads, spendByPlatform, until) {
       open: ig.open,
       revenue: ig.revenue,
       won_without_price: ig.won_without_price,
-      cac: ig.won ? spend / ig.won : null,
-      roas: spend ? ig.revenue / spend : null,
+      cost_per_lead: ig.leads ? spend / ig.leads : null,
+      // CAC и ROAS считаем только когда суммы сопоставимы
+      cac: comparable && ig.won ? spendInAmo / ig.won : null,
+      roas: comparable && spendInAmo ? ig.revenue / spendInAmo : null,
       conv: ig.leads ? ig.won / ig.leads : null
     }
   };
