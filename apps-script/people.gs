@@ -49,8 +49,19 @@ const AMO_SOURCE_FIELD_NAME = 'Источник заявки';
 const TIME_MATCH_WINDOW_H = 6;
 
 function buildPeople(params) {
+  params = params || {};   // чтобы функцию можно было запустить из редактора
   const until = params.until || pplIsoDate_(new Date());
   const since = params.since || pplIsoDate_(pplDaysAgo_(Number(params.days) || 30));
+
+  // Кэш как у остальных дашбордов: запрос ходит в amoCRM и Meta по десятку
+  // раз, без кэша страница не укладывается в таймаут и падает с
+  // «Failed to fetch». Обход — nocache=1, как в Код.gs.
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'ppl_' + since + '_' + until;
+  if (params.nocache !== '1') {
+    const hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+  }
 
   const clicks = pplReadClicks_(since, until);
   const leads = pplFetchAmoLeads_(since);
@@ -59,7 +70,7 @@ function buildPeople(params) {
   const people = pplJoinClicksToLeads_(clicks, leads);
   const ads = pplAggregateByAd_(people, spendByAd);
 
-  return {
+  const out = {
     view: 'people',
     since: since,
     until: until,
@@ -73,6 +84,15 @@ function buildPeople(params) {
     ),
     profiles: pplFetchSpendByProfile_(spendByAd)
   };
+
+  // 100 КБ — потолок значения в CacheService. Список людей может его
+  // пробить, и тогда просто не кэшируем: терять данные ради кэша нельзя.
+  try {
+    const json = JSON.stringify(out);
+    if (json.length < 100000) cache.put(cacheKey, json, 1800);
+  } catch (e) { /* кэш — не то, ради чего стоит ронять ответ */ }
+
+  return out;
 }
 
 /* ==================== 1. Клики ==================== */
@@ -295,22 +315,47 @@ function pplFetchSpendByProfile_(spendByAd) {
       if (i > 0) names[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
     });
 
+  // Спрашиваем креативы только у объявлений, которые реально тратили деньги
+  // за период. Обход всех объявлений кабинета занимал столько времени, что
+  // запрос не укладывался в таймаут и страница падала с «Failed to fetch».
+  const adIds = Object.keys(spendByAd);
   const actorByAd = {};
-  pplAdAccounts_().forEach(function (acct) {
-    let url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/ads' +
-      '?fields=id,creative{instagram_actor_id}&limit=500' +
-      '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-    for (let page = 0; page < 20 && url; page++) {
-      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (resp.getResponseCode() !== 200) break;
-      const body = JSON.parse(resp.getContentText());
-      (body.data || []).forEach(function (ad) {
-        const actor = ad.creative && ad.creative.instagram_actor_id;
-        if (actor) actorByAd[ad.id] = String(actor);
-      });
-      url = body.paging && body.paging.next;
-    }
+
+  // Креатив объявления не меняется, поэтому связку держим в кэше надолго
+  // и спрашиваем Meta только про те объявления, которых там ещё нет.
+  const cache = CacheService.getScriptCache();
+  const cached = cache.getAll(adIds.map(function (id) { return 'igact_' + id; }));
+  const missing = [];
+  adIds.forEach(function (id) {
+    const v = cached['igact_' + id];
+    if (v === undefined) missing.push(id);
+    else if (v) actorByAd[id] = v;
   });
+
+  for (let i = 0; i < missing.length; i += 25) {
+    const chunk = missing.slice(i, i + 25);
+    // фигурные скобки в fields обязательно кодировать: UrlFetchApp
+    // отвергает такой адрес с «Invalid argument», а не с ошибкой Meta
+    const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' +
+      '?ids=' + encodeURIComponent(chunk.join(',')) +
+      // спрашиваем оба имени поля: в свежих версиях API профиль лежит в
+      // instagram_user_id, в старых — в instagram_actor_id
+      '&fields=' + encodeURIComponent('creative{instagram_actor_id,instagram_user_id}') +
+      '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) continue;
+    const body = JSON.parse(resp.getContentText());
+    const toCache = {};
+    chunk.forEach(function (id) {
+      const cr = (body[id] && body[id].creative) || {};
+      const actor = cr.instagram_user_id || cr.instagram_actor_id;
+      // пустую строку тоже запоминаем: иначе объявления без профиля будем
+      // спрашивать у Meta при каждой загрузке страницы
+      toCache['igact_' + id] = actor ? String(actor) : '';
+      if (actor) actorByAd[id] = String(actor);
+    });
+    cache.putAll(toCache, 21600);
+  }
 
   const acc = {};
   Object.keys(spendByAd).forEach(function (adId) {
