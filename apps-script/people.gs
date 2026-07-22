@@ -35,6 +35,33 @@ const AMO_WON = 142;
 const AMO_LOST = 143;
 
 /**
+ * Ставит ежедневные триггеры на выгрузки и сборку витрин.
+ *
+ * Часы разнесены намеренно: сначала данные, потом витрины. Склеивать всё
+ * в одну функцию нельзя — у Apps Script лимит выполнения 6 минут, а в
+ * RAW_pays 25 тысяч строк, цепочка оборвалась бы на середине и молча.
+ *
+ * Имя без подчёркивания на конце: приватные функции не видны в списке
+ * запуска редактора, и запустить её вручную было бы нечем.
+ *
+ * Повторный запуск безопасен — свои прежние триггеры сносим, дублей нет.
+ */
+function pplSetupDailyTriggers() {
+  var plan = [['runAmoEtl',5],['dumpAlfaPay',6],['dumpAlfaLinks',7],['buildMart',8],['buildChannel',9],['buildBrands',10],['buildKanikulySverka',11]];
+  var want = {};
+  plan.forEach(function (p) { want[p[0]] = true; });
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (want[t.getHandlerFunction()]) ScriptApp.deleteTrigger(t);
+  });
+  plan.forEach(function (p) {
+    ScriptApp.newTrigger(p[0]).timeBased().atHour(p[1]).everyDays(1).create();
+  });
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    Logger.log(t.getHandlerFunction());
+  });
+}
+
+/**
  * Поле сделки в amoCRM, в котором лежит канал обращения («Instagram»,
  * «Звонок» и т.п.). Ищем по названию, а не по id: id у каждого аккаунта
  * свой, а название стабильно. Если название однажды поменяют — можно
