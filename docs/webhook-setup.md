@@ -22,7 +22,7 @@
 
 - https://script.google.com → **Создать проект**
 - Назвать, например, `IG webhook`
-- Удалить содержимое `Код.gs`, вставить туда весь `apps-script/webhook.gs`
+- Удалить содержимое `Код.gs`, вставить туда весь [../apps-script/webhook.gs](../apps-script/webhook.gs)
   из репозитория
 
 ### 2. Свойства скрипта
