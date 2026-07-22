@@ -47,7 +47,10 @@ const AMO_LOST = 143;
  * Повторный запуск безопасен — свои прежние триггеры сносим, дублей нет.
  */
 function pplSetupDailyTriggers() {
-  var plan = [['runAmoEtl',5],['dumpAlfaPay',6],['dumpAlfaLinks',7],['buildMart',8],['buildChannel',9],['buildBrands',10],['buildKanikulySverka',11]];
+  // backfillAlpha, а не dumpAlfaPay: последняя — диагностика, тянет одну
+  // страницу в лог и в таблицу не пишет. И не loadAlphaMonth: та требует
+  // месяц аргументом, а триггер аргументы не передаёт.
+  var plan = [['runAmoEtl',5],['backfillAlpha',6],['dumpAlfaLinks',7],['buildMart',8],['buildChannel',9],['buildBrands',10],['buildKanikulySverka',11]];
   var want = {};
   plan.forEach(function (p) { want[p[0]] = true; });
   ScriptApp.getProjectTriggers().forEach(function (t) {
