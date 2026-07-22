@@ -144,6 +144,32 @@
       </div>
     </div>
 
+    <div class="block">
+      <h2>Направления: куда пришли заявки из Instagram</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Воронка</th><th>Заявок</th><th>В работе</th><th>Отвалились</th>
+            <th>Оплатили</th><th>Конверсия</th><th>Выручка</th>
+          </tr></thead>
+          <tbody id="pipelinesBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Расход по Instagram-профилям</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Профиль</th><th>Расход</th><th>Клики</th><th>Объявлений</th>
+          </tr></thead>
+          <tbody id="profilesBody"></tbody>
+        </table>
+      </div>
+      <div id="profilesNote"></div>
+    </div>
+
     <div id="matchNote"></div>
 
     <div class="block">
@@ -263,6 +289,8 @@ function render() {
   }), { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 });
 
   renderChannel(d.channel);
+  renderPipelines(d.channel.pipelines || []);
+  renderProfiles(d.profiles || []);
   renderMatchNote(d);
 
   const adsBody = document.getElementById('adsBody');
@@ -343,6 +371,58 @@ function renderChannel(c) {
   });
 
   renderChannelNote(c);
+}
+
+/** Заявки из Instagram по воронкам: каникулы отдельно от регулярных занятий. */
+function renderPipelines(rows) {
+  const body = document.getElementById('pipelinesBody');
+  body.innerHTML = '';
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.pipeline}</td>
+      <td>${fmtInt(p.leads)}</td>
+      <td class="${p.open ? '' : 'zero'}">${fmtInt(p.open)}</td>
+      <td class="${p.lost ? '' : 'zero'}">${fmtInt(p.lost)}</td>
+      <td class="${p.won ? '' : 'zero'}">${fmtInt(p.won)}</td>
+      <td>${pct(p.won, p.leads)}</td>
+      <td class="${p.revenue ? '' : 'zero'}">${amoMoney(p.revenue)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+/**
+ * Расход в разрезе профилей Instagram. Кабинет один, поэтому единственный
+ * надёжный признак — от чьего имени крутилось объявление.
+ */
+function renderProfiles(rows) {
+  const body = document.getElementById('profilesBody');
+  body.innerHTML = '';
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.profile}</td>
+      <td>${adMoney(p.spend)}</td>
+      <td>${fmtInt(p.clicks)}</td>
+      <td>${fmtInt(p.ads)}</td>`;
+    body.appendChild(tr);
+  });
+
+  const unnamed = rows.filter(p => p.profile_id && p.profile === p.profile_id);
+  const unknown = rows.find(p => !p.profile_id);
+  const parts = [];
+  if (unnamed.length) {
+    parts.push(`Профили показаны идентификаторами: <b>${unnamed.map(p => p.profile_id).join(', ')}</b>.
+      Чтобы вместо цифр были «Каникулы» и «CODDY», задайте свойство скрипта
+      <b>IG_PROFILES</b> в формате <code>id:Название,id:Название</code>.`);
+  }
+  if (unknown) {
+    parts.push(`У части объявлений профиль не определён — расход
+      <b>${adMoney(unknown.spend)}</b> не отнесён ни к одному из них.
+      Обычно это объявления, поднятые из публикаций, а не собранные в кабинете.`);
+  }
+  document.getElementById('profilesNote').innerHTML =
+    parts.length ? `<div class="note" style="margin:16px 0 0">${parts.join('<br><br>')}</div>` : '';
 }
 
 /**

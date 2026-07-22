@@ -392,5 +392,54 @@ test('валюты совпадают — курс не нужен', () => {
   assert.strictEqual(c.instagram.roas, 3);
 });
 
+console.log('\nРазрез по воронкам (каникулы отдельно от регулярных)');
+
+const PIPES = { 7407214: 'Регулярные занятия', 10453398: 'Каникулы' };
+
+test('заявки из Instagram разложены по воронкам с названиями', () => {
+  scriptProps = {};
+  const c = channelSummary_([
+    mkLead({ id: 1, source: 'Instagram', pipeline_id: 10453398, status: 'won', price: 900 }),
+    mkLead({ id: 2, source: 'Instagram', pipeline_id: 10453398 }),
+    mkLead({ id: 3, source: 'Instagram', pipeline_id: 7407214, status: 'lost' })
+  ], platformSpend, '2026-07-31', AMO_CUR, PIPES);
+
+  const kanikuly = c.pipelines.find(p => p.pipeline === 'Каникулы');
+  assert.strictEqual(kanikuly.leads, 2);
+  assert.strictEqual(kanikuly.won, 1);
+  assert.strictEqual(kanikuly.revenue, 900);
+  assert.strictEqual(c.pipelines.find(p => p.pipeline === 'Регулярные занятия').lost, 1);
+});
+
+test('в разрез по воронкам попадают только заявки из Instagram', () => {
+  scriptProps = {};
+  const c = channelSummary_([
+    mkLead({ id: 1, source: 'Instagram', pipeline_id: 10453398 }),
+    mkLead({ id: 2, source: 'Звонок', pipeline_id: 10453398, status: 'won', price: 5000 })
+  ], platformSpend, '2026-07-31', AMO_CUR, PIPES);
+
+  const kanikuly = c.pipelines.find(p => p.pipeline === 'Каникулы');
+  assert.strictEqual(kanikuly.leads, 1, 'звонок не должен приписываться рекламе');
+  assert.strictEqual(kanikuly.revenue, 0);
+});
+
+test('неизвестная воронка показывается по id, а не теряется', () => {
+  scriptProps = {};
+  const c = channelSummary_(
+    [mkLead({ source: 'Instagram', pipeline_id: 99999 })],
+    platformSpend, '2026-07-31', AMO_CUR, PIPES
+  );
+  assert.strictEqual(c.pipelines[0].pipeline, '99999');
+});
+
+test('без справочника воронок расчёт не падает', () => {
+  scriptProps = {};
+  const c = channelSummary_(
+    [mkLead({ source: 'Instagram', pipeline_id: 10453398 })],
+    platformSpend, '2026-07-31', AMO_CUR, undefined
+  );
+  assert.strictEqual(c.pipelines.length, 1);
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);

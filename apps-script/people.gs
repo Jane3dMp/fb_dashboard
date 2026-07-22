@@ -68,8 +68,10 @@ function buildPeople(params) {
     people: people,
     ads: ads,
     channel: pplChannelSummary_(
-      leads, pplFetchSpendByPlatform_(since, until), until, pplFetchAmoCurrency_()
-    )
+      leads, pplFetchSpendByPlatform_(since, until), until,
+      pplFetchAmoCurrency_(), pplFetchPipelines_()
+    ),
+    profiles: pplFetchSpendByProfile_(spendByAd)
   };
 }
 
@@ -205,14 +207,18 @@ function pplEnrichWithContacts_(leads) {
  * AD_ACCOUNTS в этом проекте хранится в формате «id:Название,id:Название»,
  * поэтому берём часть до двоеточия и добавляем префикс act_.
  */
+/** act_-идентификаторы кабинетов из свойства AD_ACCOUNTS («id:Название,...»). */
+function pplAdAccounts_() {
+  return pplProp_('AD_ACCOUNTS').split(',')
+    .map(function (s) { return 'act_' + s.split(':')[0].trim(); })
+    .filter(function (a) { return a !== 'act_'; });
+}
+
 function pplFetchAdSpend_(since, until) {
-  const accounts = pplProp_('AD_ACCOUNTS').split(',').map(function (s) {
-    return 'act_' + s.split(':')[0].trim();
-  });
+  const accounts = pplAdAccounts_();
   const spend = {};
 
   accounts.forEach(function (acct) {
-    if (acct === 'act_') return;
     const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
       '?level=ad&fields=ad_id,ad_name,campaign_name,spend,clicks,impressions' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
@@ -241,13 +247,9 @@ function pplFetchAdSpend_(since, until) {
  * заявками только из Instagram — значит занижать окупаемость.
  */
 function pplFetchSpendByPlatform_(since, until) {
-  const accounts = pplProp_('AD_ACCOUNTS').split(',').map(function (s) {
-    return 'act_' + s.split(':')[0].trim();
-  });
   const out = { instagram: 0, facebook: 0, other: 0, total: 0, currency: '', mixed_currency: false };
 
-  accounts.forEach(function (acct) {
-    if (acct === 'act_') return;
+  pplAdAccounts_().forEach(function (acct) {
     const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
       '?level=account&fields=spend,account_currency&breakdowns=publisher_platform' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
@@ -269,6 +271,72 @@ function pplFetchSpendByPlatform_(since, until) {
       else out.other += v;
     });
   });
+  return out;
+}
+
+/**
+ * Расход по Instagram-профилям.
+ *
+ * У клуба несколько профилей (каникулы и CODDY), но кабинет один, поэтому
+ * разделить расход можно только через объявления: у каждого в креативе
+ * записан instagram_actor_id — профиль, от имени которого оно крутится.
+ * По названиям кампаний делить нельзя: их переименовывают, и отчёт молча
+ * начнёт врать.
+ *
+ * Имена профилей берём из свойства IG_PROFILES в формате
+ * «id:Название,id:Название». Профиль без имени показываем по id — лучше
+ * непонятная строка, чем потерянные деньги.
+ */
+function pplFetchSpendByProfile_(spendByAd) {
+  const names = {};
+  (PropertiesService.getScriptProperties().getProperty('IG_PROFILES') || '')
+    .split(',').forEach(function (pair) {
+      const i = pair.indexOf(':');
+      if (i > 0) names[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+    });
+
+  const actorByAd = {};
+  pplAdAccounts_().forEach(function (acct) {
+    let url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/ads' +
+      '?fields=id,creative{instagram_actor_id}&limit=500' +
+      '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+    for (let page = 0; page < 20 && url; page++) {
+      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (resp.getResponseCode() !== 200) break;
+      const body = JSON.parse(resp.getContentText());
+      (body.data || []).forEach(function (ad) {
+        const actor = ad.creative && ad.creative.instagram_actor_id;
+        if (actor) actorByAd[ad.id] = String(actor);
+      });
+      url = body.paging && body.paging.next;
+    }
+  });
+
+  const acc = {};
+  Object.keys(spendByAd).forEach(function (adId) {
+    const actor = actorByAd[adId] || '';
+    const key = actor || '(профиль не определён)';
+    if (!acc[key]) acc[key] = { profile_id: actor, profile: names[actor] || key, spend: 0, clicks: 0, ads: 0 };
+    acc[key].spend += spendByAd[adId].spend;
+    acc[key].clicks += spendByAd[adId].clicks;
+    acc[key].ads++;
+  });
+
+  return Object.keys(acc).map(function (k) { return acc[k]; })
+    .sort(function (a, b) { return b.spend - a.spend; });
+}
+
+/** Названия воронок, чтобы показывать «Каникулы», а не 10453398. */
+function pplFetchPipelines_() {
+  const url = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4/leads/pipelines';
+  const resp = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') },
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) return {};
+  const out = {};
+  (((JSON.parse(resp.getContentText())._embedded) || {}).pipelines || [])
+    .forEach(function (p) { out[p.id] = p.name; });
   return out;
 }
 
@@ -300,7 +368,7 @@ function pplFetchAmoCurrency_() {
  * проставляют сумму, выручка окажется занижена, и об этом честнее сказать
  * прямо на странице, чем показывать заниженный ROAS как факт.
  */
-function pplChannelSummary_(leads, spendByPlatform, until, amoCurrency) {
+function pplChannelSummary_(leads, spendByPlatform, until, amoCurrency, pipelineNames) {
   const inPeriod = leads.filter(function (l) { return l.created_at.slice(0, 10) <= until; });
 
   const bySource = {};
@@ -338,9 +406,35 @@ function pplChannelSummary_(leads, spendByPlatform, until, amoCurrency) {
   // расход, приведённый к валюте выручки
   const spendInAmo = sameCurrency ? spend : (rate > 0 ? spend * rate : null);
 
+  // Разрез по воронкам — только для заявок из Instagram: вопрос «что дала
+  // реклама» бессмыслен для сделок, пришедших звонком или от действующих
+  // клиентов. Именно здесь видно каникулы отдельно от регулярных занятий.
+  const byPipeline = {};
+  inPeriod.forEach(function (l) {
+    if (!/instagram/i.test(l.source || '')) return;
+    const id = l.pipeline_id;
+    if (!byPipeline[id]) {
+      byPipeline[id] = {
+        pipeline_id: id,
+        pipeline: (pipelineNames && pipelineNames[id]) || String(id),
+        leads: 0, won: 0, lost: 0, open: 0, revenue: 0, won_without_price: 0
+      };
+    }
+    const p = byPipeline[id];
+    p.leads++;
+    if (l.status === 'won') {
+      p.won++;
+      p.revenue += l.price;
+      if (!l.price) p.won_without_price++;
+    } else if (l.status === 'lost') p.lost++;
+    else p.open++;
+  });
+
   return {
     spend: spendByPlatform,
     sources: sources,
+    pipelines: Object.keys(byPipeline).map(function (k) { return byPipeline[k]; })
+      .sort(function (a, b) { return b.leads - a.leads; }),
     source_filled: inPeriod.length ? (inPeriod.length - (bySource['(не указан)'] || { leads: 0 }).leads) / inPeriod.length : 0,
     currency: {
       ads: adCur,
