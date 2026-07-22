@@ -351,9 +351,13 @@ function renderChannel(c) {
     ig.cost_per_lead === null ? 'нет заявок за период' : adMoney(ig.cost_per_lead) + ' за заявку';
   document.getElementById('cWon').textContent = fmtInt(ig.won);
   document.getElementById('cWonSub').textContent = pct(ig.won, ig.leads) + ' от заявок';
-  document.getElementById('cRevenue').textContent = amoMoney(ig.revenue);
-  document.getElementById('cCac').textContent = ig.cac === null ? '—' : amoMoney(ig.cac);
-  document.getElementById('cRoas').textContent = ig.roas === null ? '—' : ig.roas.toFixed(2) + '×';
+  // Деньги временно не показываем: см. renderMoneySourceNote — выручка
+  // считалась из поля «Бюджет» в amoCRM, а фактические оплаты живут в
+  // AlfaCRM. Показывать заниженные цифры опаснее, чем прочерк: по ним
+  // можно вырезать работающее направление.
+  document.getElementById('cRevenue').textContent = '—';
+  document.getElementById('cCac').textContent = '—';
+  document.getElementById('cRoas').textContent = '—';
 
   const body = document.getElementById('sourcesBody');
   body.innerHTML = '';
@@ -366,7 +370,7 @@ function renderChannel(c) {
       <td class="${s.lost ? '' : 'zero'}">${fmtInt(s.lost)}</td>
       <td class="${s.won ? '' : 'zero'}">${fmtInt(s.won)}</td>
       <td>${pct(s.won, s.leads)}</td>
-      <td class="${s.revenue ? '' : 'zero'}">${amoMoney(s.revenue)}</td>`;
+      <td class="zero">—</td>`;
     body.appendChild(tr);
   });
 
@@ -386,7 +390,7 @@ function renderPipelines(rows) {
       <td class="${p.lost ? '' : 'zero'}">${fmtInt(p.lost)}</td>
       <td class="${p.won ? '' : 'zero'}">${fmtInt(p.won)}</td>
       <td>${pct(p.won, p.leads)}</td>
-      <td class="${p.revenue ? '' : 'zero'}">${amoMoney(p.revenue)}</td>`;
+      <td class="zero">—</td>`;
     body.appendChild(tr);
   });
 }
@@ -435,6 +439,15 @@ function renderChannelNote(c) {
   const parts = [];
   const ig = c.instagram;
   const cur = c.currency;
+
+  // Главное предупреждение — первым. Оплаты клуб проводит в AlfaCRM,
+  // а не в amoCRM: там заявка и намерение, деньги в другой системе.
+  parts.push(`<b>Выручка, стоимость клиента и ROAS временно скрыты.</b>
+    Они считались из поля «Бюджет» сделки amoCRM, но фактические оплаты
+    проходят в AlfaCRM — значит цифры были заниженными и им нельзя верить.
+    Столбцы «Оплатили» ниже — это статус сделки в amoCRM, а не факт платежа:
+    если менеджер не двигает сделку, оплата туда не попадёт.
+    Расход, клики и количество заявок при этом настоящие.`);
 
   // Самое важное предупреждение: без курса CAC и ROAS не считаются вовсе.
   // Показать их «примерно» было бы хуже, чем не показать: рублёвая выручка,
