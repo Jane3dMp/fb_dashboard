@@ -230,7 +230,10 @@ const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
  * Поэтому знак валюты не хардкодим, а подставляем тот, что пришёл с данными:
  * иначе доллары подписываются рублями и ROAS превращается в выдумку.
  */
-const CUR_SIGN = { RUB: '₽', BYN: 'Br', USD: '$', EUR: '€', KZT: '₸', UAH: '₴' };
+// BYR — старый код белорусского рубля, отменён в 2016-м, но в настройках
+// amoCRM у многих аккаунтов остался именно он. На расчёты не влияет,
+// это только подпись.
+const CUR_SIGN = { RUB: '₽', BYN: 'Br', BYR: 'Br', USD: '$', EUR: '€', KZT: '₸', UAH: '₴' };
 const money = (n, cur) => n.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) +
   ' ' + (CUR_SIGN[cur] || cur || '');
 const adMoney = n => money(n, lastData && lastData.channel.currency.ads);
