@@ -530,7 +530,7 @@ const igLead = (over) => Object.assign({
 }, over);
 const customer = (id, phones, amoContact) => ({
   customer_id: id, branches: '4', phones: phones,
-  amo_contact_id: amoContact || '', created_at: ''
+  amo_contact_id: amoContact || '', created_at: '', name: 'Клиент ' + id
 });
 const pay = (cid, date, income, payId) => ({
   document_date: date, customer_id: cid, income: income, branch: '4',
@@ -689,6 +689,33 @@ test('заявка вне периода в расчёт не попадает',
     '2026-07-01', '2026-07-31'
   );
   assert.strictEqual(r.leads, 0);
+});
+
+test('пофамильный список оплативших: имя, направление, дата, сумма', () => {
+  const r = revenueCore_(
+    [igLead({})],
+    [customer(101, '+375291102796'), customer(102, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1'), pay(102, '20.07.2026', 300, 'p2')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.paid_list.length, 2, 'каждый ребёнок семьи — отдельной строкой');
+  assert.strictEqual(r.paid_list[0].name, 'Клиент 102', 'сортировка по сумме, богатые сверху');
+  assert.strictEqual(r.paid_list[0].revenue, 300);
+  assert.strictEqual(r.paid_list[1].revenue, 250);
+  assert.strictEqual(r.paid_list[0].brand, 'Уикенд');
+  assert.strictEqual(r.paid_list[0].lead_date, '2026-07-10');
+  const total = r.paid_list.reduce((s, p) => s + p.revenue, 0);
+  assert.strictEqual(total, r.revenue, 'сумма списка сходится с общей выручкой');
+});
+
+test('клиент без платежей в список оплативших не попадает', () => {
+  const r = revenueCore_(
+    [igLead({})],
+    [customer(101, '+375291102796')],
+    [pay(101, '05.07.2026', 999, 'p1')],   // платёж раньше заявки
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.paid_list.length, 0);
 });
 
 test('выручка по источникам считается и для не-Instagram заявок', () => {

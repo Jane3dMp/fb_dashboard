@@ -40,6 +40,9 @@
     padding:8px 16px;cursor:pointer;color:var(--ink)
   }
   .controls button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .controls .custom-period{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:#666;margin-left:8px}
+  .controls .custom-period input{padding:7px 10px;border:1px solid #ddd;border-radius:999px;font:inherit;font-size:13px;background:#fff}
+  details.paid summary{cursor:pointer;font-weight:600;padding:10px 0;user-select:none}
   .controls .right{margin-left:auto;color:var(--ink2)}
 
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:26px}
@@ -114,6 +117,11 @@
     <button data-days="7">7 дней</button>
     <button data-days="30" class="active">30 дней</button>
     <button data-days="90">90 дней</button>
+    <span class="custom-period">
+      с <input type="date" id="dateFrom">
+      по <input type="date" id="dateTo">
+      <button id="btnPeriod">Показать период</button>
+    </span>
     <button class="right" id="btnNames">Показать имена</button>
   </div>
 
@@ -156,6 +164,20 @@
         </table>
       </div>
       <div id="revenueNote"></div>
+      <details class="paid" id="paidDetails" style="display:none">
+        <summary id="paidSummary">Кто оплатил и сколько принёс</summary>
+        <div class="note" style="margin:4px 0 10px">Каждая строка — клиент AlfaCRM,
+          связанный с Instagram-заявкой периода. «Принесено» — все его оплаты
+          в Альфе с даты заявки по сегодняшний день (LTV с момента заявки).</div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Клиент</th><th>Направление</th><th>Дата заявки</th><th>Принесено денег</th>
+            </tr></thead>
+            <tbody id="paidBody"></tbody>
+          </table>
+        </div>
+      </details>
     </div>
 
     <div class="block">
@@ -216,16 +238,28 @@
 <script src="assets/dash.js"></script>
 <script>
 let lastData = null;
-let currentDays = 30;
+let currentPeriod = { days: 30 };
 let showNames = false;
 
 document.querySelectorAll('.controls button[data-days]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.controls button[data-days]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    currentDays = Number(btn.dataset.days);
+    currentPeriod = { days: Number(btn.dataset.days) };
     loadData();
   });
+});
+
+// произвольный период: смотрим заявки, пришедшие в эти даты, и их деньги
+// с даты заявки по сегодня — удобно оценивать LTV конкретной кампании
+document.getElementById('btnPeriod').addEventListener('click', () => {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('Заполните обе даты'); return; }
+  if (from > to) { alert('Дата «с» позже даты «по»'); return; }
+  document.querySelectorAll('.controls button[data-days]').forEach(b => b.classList.remove('active'));
+  currentPeriod = { since: from, until: to };
+  loadData();
 });
 
 document.getElementById('btnNames').addEventListener('click', () => {
@@ -243,7 +277,10 @@ async function loadData() {
   content.style.display = 'none';
 
   try {
-    lastData = await api('view=people&days=' + currentDays);
+    const q = currentPeriod.days
+      ? 'days=' + currentPeriod.days
+      : 'since=' + currentPeriod.since + '&until=' + currentPeriod.until;
+    lastData = await api('view=people&' + q);
     // Старый бэкенд про view=people ещё не знает и молча отдаёт данные
     // по расходу — без этой проверки страница падала бы с невнятным
     // «Cannot read properties of undefined»
@@ -447,6 +484,29 @@ function renderRevenue(r, c) {
   }
   document.getElementById('revenueNote').innerHTML =
     `<div class="note" style="margin:16px 0 0">${parts.join('<br><br>')}</div>`;
+
+  // раскрывашка: пофамильно, кто оплатил и сколько принёс с даты заявки
+  const det = document.getElementById('paidDetails');
+  const list = r.paid_list || [];
+  if (list.length) {
+    det.style.display = 'block';
+    document.getElementById('paidSummary').textContent =
+      `Кто оплатил и сколько принёс — ${fmtInt(list.length)} чел., ${amoMoney(r.revenue)}`;
+    const pb = document.getElementById('paidBody');
+    pb.innerHTML = '';
+    list.forEach(p => {
+      const d = String(p.lead_date || '').split('-');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name}</td>
+        <td>${p.brand}</td>
+        <td>${d.length === 3 ? d[2] + '.' + d[1] + '.' + d[0] : p.lead_date}</td>
+        <td>${amoMoney(p.revenue)}</td>`;
+      pb.appendChild(tr);
+    });
+  } else {
+    det.style.display = 'none';
+  }
 }
 
 /** Заявки из Instagram по воронкам: каникулы отдельно от регулярных занятий. */

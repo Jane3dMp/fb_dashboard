@@ -393,6 +393,42 @@ function pplFetchSpendByProfile_(spendByAd) {
     cache.putAll(toCache, 21600);
   }
 
+  // Имена профилей: свойство IG_PROFILES побеждает, остальных спрашиваем
+  // у Meta (username отдаётся тем же токеном). Ответ кэшируем надолго —
+  // имя профиля не меняется. Если Meta не отдаст (нет прав) — останется id.
+  const actors = [];
+  Object.keys(actorByAd).forEach(function (adId) {
+    const a = actorByAd[adId];
+    if (a && !names[a] && actors.indexOf(a) === -1) actors.push(a);
+  });
+  if (actors.length) {
+    const cachedNames = cache.getAll(actors.map(function (id) { return 'igname_' + id; }));
+    const missingNames = [];
+    actors.forEach(function (id) {
+      const v = cachedNames['igname_' + id];
+      if (v === undefined) missingNames.push(id);
+      else if (v) names[id] = v;
+    });
+    if (missingNames.length) {
+      const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' +
+        '?ids=' + encodeURIComponent(missingNames.join(',')) +
+        '&fields=' + encodeURIComponent('username,name') +
+        '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (resp.getResponseCode() === 200) {
+        const body = JSON.parse(resp.getContentText());
+        const toCache = {};
+        missingNames.forEach(function (id) {
+          const p = body[id] || {};
+          const nm = p.username ? '@' + p.username : (p.name || '');
+          toCache['igname_' + id] = nm; // пустоту тоже кэшируем, чтобы не спрашивать зря
+          if (nm) names[id] = nm;
+        });
+        cache.putAll(toCache, 21600);
+      }
+    }
+  }
+
   const acc = {};
   Object.keys(spendByAd).forEach(function (adId) {
     const actor = actorByAd[adId] || '';
@@ -701,7 +737,7 @@ function pplEtlAlfaCustomers() {
           const m = String(u).match(/amocrm\.ru\/contacts\/detail\/(\d+)/);
           return m ? m[1] : '';
         }).filter(Boolean))[0] || '';
-        rows.push([c.id, (c.branch_ids || [branch]).join(';'), phones.join(';'), amoContact, String(c.created_at || '')]);
+        rows.push([c.id, (c.branch_ids || [branch]).join(';'), phones.join(';'), amoContact, String(c.created_at || ''), String(c.name || '')]);
       });
       if (items.length < 50) break;
     }
@@ -710,7 +746,7 @@ function pplEtlAlfaCustomers() {
   const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
   const sh = ss.getSheetByName('RAW_alfa_customers') || ss.insertSheet('RAW_alfa_customers');
   sh.clearContents();
-  const header = ['customer_id', 'branches', 'phones', 'amo_contact_id', 'created_at'];
+  const header = ['customer_id', 'branches', 'phones', 'amo_contact_id', 'created_at', 'name'];
   sh.getRange(1, 1, 1, header.length).setValues([header]);
   if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
   Logger.log('RAW_alfa_customers: ' + rows.length + ' клиентов');
@@ -793,16 +829,19 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
   // телефон → клиенты с этим номером; контакт amo → клиенты с этой ссылкой
   const byPhone = {};
   const byContact = {};
+  const namesById = {};
   customers.forEach(function (c) {
+    const cid = String(c.customer_id);
+    namesById[cid] = String(c.name || '');
     String(c.phones || '').split(';').forEach(function (ph) {
       if (!ph) return;
       if (!byPhone[ph]) byPhone[ph] = [];
-      byPhone[ph].push(String(c.customer_id));
+      byPhone[ph].push(cid);
     });
     const ac = String(c.amo_contact_id || '').trim();
     if (ac) {
       if (!byContact[ac]) byContact[ac] = [];
-      byContact[ac].push(String(c.customer_id));
+      byContact[ac].push(cid);
     }
   });
 
@@ -855,6 +894,8 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
   const byBrand = {};
   let withPhone = 0, withAlfa = 0, paidCustomers = 0, revenue = 0;
   const seenCustomers = {};
+  // пофамильный список: кто именно оплатил и сколько принёс с даты заявки
+  const paidList = [];
 
   igLeads.forEach(function (l) {
     const brand = pplBrand_(l.pipeline);
@@ -877,7 +918,17 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
       if (seenCustomers[cid]) return;
       seenCustomers[cid] = true;
       hasNew = true;
-      sum += paysSince(cid, l._date);
+      const cSum = paysSince(cid, l._date);
+      sum += cSum;
+      if (cSum > 0) {
+        paidList.push({
+          customer_id: cid,
+          name: namesById[cid] || ('клиент #' + cid),
+          brand: key,
+          lead_date: l._date,
+          revenue: cSum
+        });
+      }
     });
     if (hasNew && sum > 0) {
       paidCustomers++;
@@ -933,7 +984,8 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     brands: Object.keys(byBrand).map(function (k) { return byBrand[k]; })
       .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; }),
     by_source: bySource,
-    by_pipeline: byPipeline
+    by_pipeline: byPipeline,
+    paid_list: paidList.sort(function (a, b) { return b.revenue - a.revenue; })
   };
 }
 
@@ -963,7 +1015,8 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
     roas: comparable && spendInAmo ? core.revenue / spendInAmo : null,
     brands: core.brands,
     by_source: core.by_source,
-    by_pipeline: core.by_pipeline
+    by_pipeline: core.by_pipeline,
+    paid_list: core.paid_list
   };
 }
 
