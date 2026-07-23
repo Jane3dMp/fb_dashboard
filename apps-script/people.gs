@@ -908,6 +908,52 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
   };
 }
 
+/**
+ * Диагностика: где лежат телефоны у Instagram-заявок, оставшихся без
+ * phone_e164. Владелец видит номера в карточках amo, а выгрузка их не
+ * находит — значит, номер живёт не в том поле или не у того контакта,
+ * куда смотрит etl_amo (поле 1648707 первого контакта сделки).
+ *
+ * Берёт 20 свежих таких заявок, тянет их сделки со ВСЕМИ контактами и
+ * печатает в журнал каждое заполненное поле каждого контакта, помечая
+ * телефоноподобные значения. Запуск руками из редактора, в листы не пишет.
+ */
+function pplDumpContactFields() {
+  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') }, muteHttpExceptions: true };
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
+
+  const rows = pplRows_('RAW_leads').filter(function (l) {
+    return /instagram/i.test(String(l.source || '')) && !String(l.phone_e164 || '').trim() && l.lead_id;
+  }).slice(-20);
+  Logger.log('Instagram-заявок без телефона в выборке: ' + rows.length);
+
+  let noContacts = 0, contactsSeen = 0, phoneLikeSeen = 0;
+  rows.forEach(function (l) {
+    const resp = UrlFetchApp.fetch(base + '/leads/' + l.lead_id + '?with=contacts', auth);
+    if (resp.getResponseCode() !== 200) { Logger.log(l.lead_id + ': сделка HTTP ' + resp.getResponseCode()); return; }
+    const contacts = ((JSON.parse(resp.getContentText())._embedded || {}).contacts || []);
+    if (!contacts.length) { noContacts++; Logger.log('lead ' + l.lead_id + ': контактов нет'); return; }
+
+    contacts.forEach(function (c, idx) {
+      const cr = UrlFetchApp.fetch(base + '/contacts/' + c.id, auth);
+      if (cr.getResponseCode() !== 200) return;
+      contactsSeen++;
+      const cd = JSON.parse(cr.getContentText());
+      const fields = (cd.custom_fields_values || []).map(function (f) {
+        const v = (f.values && f.values[0] && String(f.values[0].value || '')) || '';
+        const digits = v.replace(/\D/g, '');
+        const mark = digits.length >= 9 ? '  <-- ТЕЛЕФОНОПОДОБНОЕ' : '';
+        if (mark) phoneLikeSeen++;
+        return f.field_id + ' / ' + (f.field_code || '-') + ' «' + f.field_name + '» = ' + v.slice(0, 40) + mark;
+      });
+      Logger.log('lead ' + l.lead_id + ' контакт#' + idx + ' id=' + c.id + ' «' + (cd.name || '') + '»' +
+        (fields.length ? '\n  ' + fields.join('\n  ') : ': заполненных полей нет'));
+    });
+  });
+  Logger.log('Итого: без контактов ' + noContacts + ' из ' + rows.length +
+    '; контактов просмотрено ' + contactsSeen + '; телефоноподобных значений ' + phoneLikeSeen);
+}
+
 /* ==================== 4. Склейка ==================== */
 
 function pplMatchingMode_() {
