@@ -822,32 +822,50 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     paysBy[id].push({ date: pplAnyIso_(r.document_date), income: Number(r.income || 0) });
   });
 
+  // все заявки периода: сводные метрики считаются по Instagram (вопрос
+  // страницы — окупаемость рекламы), а разрез по источникам — по всем
   const inPeriod = leads.filter(function (l) {
     const d = pplAnyIso_(l.created_at);
     l._date = d;
-    return d >= since && d <= until && /instagram/i.test(String(l.source || ''));
+    return d >= since && d <= until;
   });
+  const igLeads = inPeriod.filter(function (l) {
+    return /instagram/i.test(String(l.source || ''));
+  });
+
+  /** Клиенты Альфы, к которым ведёт заявка: ссылка → контакт → телефон. */
+  function customersOf(l) {
+    const linked = pplAlfaCustomerId_(l.alfa_url);
+    if (linked) return [linked];
+    const contact = String(l.contact_id || '').trim();
+    if (contact && byContact[contact]) return byContact[contact];
+    const phone = pplNormPhone_(l.phone_e164);
+    return (phone && byPhone[phone]) || [];
+  }
+
+  /** Платежи клиента с даты заявки. */
+  function paysSince(cid, date) {
+    let sum = 0;
+    (paysBy[cid] || []).forEach(function (p) {
+      if (p.date && p.date >= date) sum += p.income;
+    });
+    return sum;
+  }
 
   const byBrand = {};
   let withPhone = 0, withAlfa = 0, paidCustomers = 0, revenue = 0;
   const seenCustomers = {};
 
-  inPeriod.forEach(function (l) {
+  igLeads.forEach(function (l) {
     const brand = pplBrand_(l.pipeline);
     const key = brand || '(вне карты направлений)';
     if (!byBrand[key]) byBrand[key] = { brand: key, leads: 0, with_alfa: 0, paid: 0, revenue: 0 };
     const b = byBrand[key];
     b.leads++;
 
-    const phone = pplNormPhone_(l.phone_e164);
-    if (phone) withPhone++;
+    if (pplNormPhone_(l.phone_e164)) withPhone++;
 
-    const linked = pplAlfaCustomerId_(l.alfa_url);
-    const contact = String(l.contact_id || '').trim();
-    let ids;
-    if (linked) ids = [linked];
-    else if (contact && byContact[contact]) ids = byContact[contact];
-    else ids = (phone && byPhone[phone]) || [];
+    const ids = customersOf(l);
     if (!ids.length) return;
 
     withAlfa++;
@@ -859,9 +877,7 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
       if (seenCustomers[cid]) return;
       seenCustomers[cid] = true;
       hasNew = true;
-      (paysBy[cid] || []).forEach(function (p) {
-        if (p.date && p.date >= l._date) sum += p.income;
-      });
+      sum += paysSince(cid, l._date);
     });
     if (hasNew && sum > 0) {
       paidCustomers++;
@@ -871,15 +887,53 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     }
   });
 
+  // Разрез по всем источникам — те же правила, что и выше, но клиент
+  // дедуплицируется внутри источника: пришедший и звонком, и из Instagram
+  // попадёт в обе строки, потому что строка отвечает на вопрос «сколько
+  // денег принесли пришедшие отсюда», а не делит клиента между каналами.
+  function slice(rows, keyOf) {
+    const acc = {};
+    const seen = {};
+    rows.forEach(function (l) {
+      const key = keyOf(l);
+      if (!acc[key]) acc[key] = { key: key, leads: 0, with_alfa: 0, paid: 0, revenue: 0 };
+      const s = acc[key];
+      s.leads++;
+      const ids = customersOf(l);
+      if (!ids.length) return;
+      s.with_alfa++;
+      let sum = 0, hasNew = false;
+      ids.forEach(function (cid) {
+        if (seen[key + '|' + cid]) return;
+        seen[key + '|' + cid] = true;
+        hasNew = true;
+        sum += paysSince(cid, l._date);
+      });
+      if (hasNew && sum > 0) { s.paid++; s.revenue += sum; }
+    });
+    return Object.keys(acc).map(function (k) { return acc[k]; })
+      .sort(function (a, b) { return b.leads - a.leads; });
+  }
+
+  const bySource = slice(inPeriod, function (l) {
+    return String(l.source || '').trim() || '(не указан)';
+  }).map(function (s) { return { source: s.key, leads: s.leads, with_alfa: s.with_alfa, paid: s.paid, revenue: s.revenue }; });
+
+  const byPipeline = slice(igLeads, function (l) {
+    return String(l.pipeline || '').trim() || '(без воронки)';
+  }).map(function (s) { return { pipeline: s.key, leads: s.leads, with_alfa: s.with_alfa, paid: s.paid, revenue: s.revenue }; });
+
   return {
-    leads: inPeriod.length,
+    leads: igLeads.length,
     with_phone: withPhone,
     with_alfa: withAlfa,
-    matched_share: inPeriod.length ? withAlfa / inPeriod.length : 0,
+    matched_share: igLeads.length ? withAlfa / igLeads.length : 0,
     paid_customers: paidCustomers,
     revenue: revenue,
     brands: Object.keys(byBrand).map(function (k) { return byBrand[k]; })
-      .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; })
+      .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; }),
+    by_source: bySource,
+    by_pipeline: byPipeline
   };
 }
 
@@ -907,7 +961,9 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
     revenue: core.revenue,
     cac: comparable && core.paid_customers ? spendInAmo / core.paid_customers : null,
     roas: comparable && spendInAmo ? core.revenue / spendInAmo : null,
-    brands: core.brands
+    brands: core.brands,
+    by_source: core.by_source,
+    by_pipeline: core.by_pipeline
   };
 }
 

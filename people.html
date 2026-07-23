@@ -302,9 +302,9 @@ function render() {
     deals: a.deals + r.deals, won: a.won + r.won, revenue: a.revenue + r.revenue
   }), { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 });
 
-  renderChannel(d.channel);
+  renderChannel(d.channel, d.revenue);
   renderRevenue(d.revenue, d.channel);
-  renderPipelines(d.channel.pipelines || []);
+  renderPipelines(d.channel.pipelines || [], d.revenue);
   renderProfiles(d.profiles || []);
   renderMatchNote(d);
 
@@ -356,7 +356,7 @@ function render() {
 }
 
 /** Окупаемость канала целиком: расход в Instagram против заявок с этим источником. */
-function renderChannel(c) {
+function renderChannel(c, r) {
   const ig = c.instagram;
   document.getElementById('cSpend').textContent = adMoney(ig.spend);
   document.getElementById('cSpendSub').textContent =
@@ -368,9 +368,15 @@ function renderChannel(c) {
   document.getElementById('cWonSub').textContent = pct(ig.won, ig.leads) + ' от заявок';
   // Деньги заполняет renderRevenue: они приходят из AlfaCRM, а не из amoCRM.
 
+  // настоящие деньги из Альфы по каждому источнику (мост по телефону);
+  // старый кэш бэкенда может их ещё не отдавать — тогда прочерк
+  const revBySource = {};
+  ((r && r.by_source) || []).forEach(x => { revBySource[x.source] = x; });
+
   const body = document.getElementById('sourcesBody');
   body.innerHTML = '';
   c.sources.forEach(s => {
+    const rev = revBySource[s.source];
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${s.source}</td>
@@ -379,7 +385,7 @@ function renderChannel(c) {
       <td class="${s.lost ? '' : 'zero'}">${fmtInt(s.lost)}</td>
       <td class="${s.won ? '' : 'zero'}">${fmtInt(s.won)}</td>
       <td>${pct(s.won, s.leads)}</td>
-      <td class="zero">—</td>`;
+      <td class="${rev && rev.revenue ? '' : 'zero'}">${rev && rev.revenue ? amoMoney(rev.revenue) : '—'}</td>`;
     body.appendChild(tr);
   });
 
@@ -444,10 +450,14 @@ function renderRevenue(r, c) {
 }
 
 /** Заявки из Instagram по воронкам: каникулы отдельно от регулярных занятий. */
-function renderPipelines(rows) {
+function renderPipelines(rows, r) {
+  const revByPipe = {};
+  ((r && r.by_pipeline) || []).forEach(x => { revByPipe[x.pipeline] = x; });
+
   const body = document.getElementById('pipelinesBody');
   body.innerHTML = '';
   rows.forEach(p => {
+    const rev = revByPipe[p.pipeline];
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${p.pipeline}</td>
@@ -456,7 +466,7 @@ function renderPipelines(rows) {
       <td class="${p.lost ? '' : 'zero'}">${fmtInt(p.lost)}</td>
       <td class="${p.won ? '' : 'zero'}">${fmtInt(p.won)}</td>
       <td>${pct(p.won, p.leads)}</td>
-      <td class="zero">—</td>`;
+      <td class="${rev && rev.revenue ? '' : 'zero'}">${rev && rev.revenue ? amoMoney(rev.revenue) : '—'}</td>`;
     body.appendChild(tr);
   });
 }

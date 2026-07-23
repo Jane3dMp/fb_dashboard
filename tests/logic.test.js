@@ -691,6 +691,44 @@ test('заявка вне периода в расчёт не попадает',
   assert.strictEqual(r.leads, 0);
 });
 
+test('выручка по источникам считается и для не-Instagram заявок', () => {
+  const r = revenueCore_(
+    [igLead({ source: 'Звонок' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.revenue, 0, 'сводные метрики остаются только про Instagram');
+  const call = r.by_source.find(s => s.source === 'Звонок');
+  assert.strictEqual(call.paid, 1);
+  assert.strictEqual(call.revenue, 250, 'а разрез по источникам видит деньги звонка');
+});
+
+test('клиент, пришедший двумя каналами, виден в обеих строках источников', () => {
+  const r = revenueCore_(
+    [igLead({}), igLead({ source: 'Звонок' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  const ig = r.by_source.find(s => s.source === 'Instagram');
+  const call = r.by_source.find(s => s.source === 'Звонок');
+  assert.strictEqual(ig.revenue, 250, 'строка отвечает «сколько принесли пришедшие отсюда»');
+  assert.strictEqual(call.revenue, 250);
+});
+
+test('разрез по воронкам содержит только Instagram-заявки', () => {
+  const r = revenueCore_(
+    [igLead({ pipeline: 'Каникулы' }), igLead({ source: 'Звонок', pipeline: 'Детали' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.ok(r.by_pipeline.find(p => p.pipeline === 'Каникулы'));
+  assert.strictEqual(r.by_pipeline.find(p => p.pipeline === 'Детали'), undefined,
+    'воронка звонка не должна попадать в рекламный разрез');
+});
+
 test('даты-объекты из листа сравниваются с датой заявки правильно', () => {
   const r = revenueCore_(
     [igLead({ created_at: new Date(2026, 6, 10) })],
