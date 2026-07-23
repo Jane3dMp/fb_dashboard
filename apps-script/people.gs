@@ -931,7 +931,29 @@ function pplDumpContactFields() {
   rows.forEach(function (l) {
     const resp = UrlFetchApp.fetch(base + '/leads/' + l.lead_id + '?with=contacts', auth);
     if (resp.getResponseCode() !== 200) { Logger.log(l.lead_id + ': сделка HTTP ' + resp.getResponseCode()); return; }
-    const contacts = ((JSON.parse(resp.getContentText())._embedded || {}).contacts || []);
+    const lead = JSON.parse(resp.getContentText());
+
+    // телефон могли записать в поле самой сделки
+    (lead.custom_fields_values || []).forEach(function (f) {
+      const fv = (f.values && f.values[0] && String(f.values[0].value || '')) || '';
+      if (fv.replace(/\D/g, '').length >= 9) {
+        Logger.log('lead ' + l.lead_id + ' ПОЛЕ СДЕЛКИ ' + f.field_id + ' «' + f.field_name + '» ~ ' + fv.slice(0, 30));
+      }
+    });
+
+    // ...или в примечание сделки
+    const nr = UrlFetchApp.fetch(base + '/leads/' + l.lead_id + '/notes?limit=50', auth);
+    if (nr.getResponseCode() === 200) {
+      (((JSON.parse(nr.getContentText())._embedded || {}).notes) || []).forEach(function (n) {
+        const txt = String((n.params && (n.params.text || n.params.message_text)) || '');
+        const digits = txt.replace(/\D/g, '');
+        if (digits.length >= 9 && digits.length <= 15) {
+          Logger.log('lead ' + l.lead_id + ' ПРИМЕЧАНИЕ ' + (n.note_type || '') + ' ~ ' + txt.slice(0, 60));
+        }
+      });
+    }
+
+    const contacts = ((lead._embedded || {}).contacts || []);
     if (!contacts.length) { noContacts++; Logger.log('lead ' + l.lead_id + ': контактов нет'); return; }
 
     contacts.forEach(function (c, idx) {
