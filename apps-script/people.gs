@@ -100,6 +100,9 @@ function buildPeople(params) {
   const people = pplJoinClicksToLeads_(clicks, leads);
   const ads = pplAggregateByAd_(people, spendByAd);
 
+  const byPlatform = pplFetchSpendByPlatform_(since, until);
+  const amoCurrency = pplFetchAmoCurrency_();
+
   const out = {
     view: 'people',
     since: since,
@@ -108,11 +111,9 @@ function buildPeople(params) {
     matching: pplMatchingMode_(),
     people: people,
     ads: ads,
-    channel: pplChannelSummary_(
-      leads, pplFetchSpendByPlatform_(since, until), until,
-      pplFetchAmoCurrency_(), pplFetchPipelines_()
-    ),
-    profiles: pplFetchSpendByProfile_(spendByAd)
+    channel: pplChannelSummary_(leads, byPlatform, until, amoCurrency, pplFetchPipelines_()),
+    profiles: pplFetchSpendByProfile_(spendByAd),
+    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency)
   };
 
   // 100 КБ — потолок значения в CacheService. Список людей может его
@@ -533,6 +534,142 @@ function pplChannelSummary_(leads, spendByPlatform, until, amoCurrency, pipeline
       roas: comparable && spendInAmo ? ig.revenue / spendInAmo : null,
       conv: ig.leads ? ig.won / ig.leads : null
     }
+  };
+}
+
+/* ============ 3b. Выручка из Альфы (настоящие деньги) ============ */
+
+/**
+ * Группа направления по воронке.
+ *
+ * BRAND_MAP объявлена в build_brands.gs и видна здесь: файлы проекта делят
+ * одну глобальную область. Берём её, а не свою копию, — иначе «Путь клиента»
+ * и дашборд направлений однажды разойдутся в цифрах.
+ * null означает воронку вне карты (например «Тест») — такие не считаем.
+ */
+function pplBrand_(pipeline) {
+  const key = String(pipeline || '').trim().toLowerCase();
+  const map = (typeof BRAND_MAP !== 'undefined') ? BRAND_MAP : {};
+  return map[key] || null;
+}
+
+/** Лист по имени или null — чтобы отсутствие витрины не роняло страницу. */
+function pplSheet_(name) {
+  const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(name);
+  return (sh && sh.getLastRow() > 1) ? sh : null;
+}
+
+/** Строки листа как массив объектов по заголовку. */
+function pplRows_(name) {
+  const sh = pplSheet_(name);
+  if (!sh) return [];
+  const values = sh.getDataRange().getValues();
+  const header = values.shift().map(function (h) { return String(h).trim(); });
+  return values.map(function (r) {
+    const o = {};
+    header.forEach(function (h, i) { o[h] = r[i]; });
+    return o;
+  });
+}
+
+/**
+ * Идентификатор клиента Альфы из ссылки в карточке amoCRM.
+ *
+ * Формат ссылки не гарантирован, поэтому берём последнюю группу цифр —
+ * она и есть id клиента. Доля распознанных ссылок возвращается наружу,
+ * чтобы на странице было видно, если связка перестала работать.
+ */
+function pplAlfaCustomerId_(url) {
+  const digits = String(url || '').match(/\d+/g);
+  return digits && digits.length ? digits[digits.length - 1] : '';
+}
+
+/** Платежи Альфы, сгруппированные по клиенту. */
+function pplPaysByCustomer_() {
+  const acc = {};
+  pplRows_('RAW_pays').forEach(function (r) {
+    const id = String(r.customer_id || '').trim();
+    if (!id) return;
+    const d = r.document_date instanceof Date
+      ? pplIsoDate_(r.document_date)
+      : String(r.document_date || '').slice(0, 10);
+    if (!acc[id]) acc[id] = [];
+    acc[id].push({ date: d, income: Number(r.income || 0) });
+  });
+  return acc;
+}
+
+/**
+ * Выручка по заявкам из Instagram — по фактическим оплатам в AlfaCRM.
+ *
+ * Считаем так: берём заявки периода с источником Instagram, у каждой через
+ * alfa_url находим клиента Альфы и суммируем его платежи, сделанные НЕ РАНЬШЕ
+ * даты заявки. Платёж до появления заявки рекламой не вызван — это уже
+ * действующий клиент, и приписывать его объявлению нельзя.
+ *
+ * Период считается по дате заявки, а не по дате платежа: вопрос звучит
+ * «что принесли заявки этого периода», а не «сколько денег пришло в кассу».
+ * Поэтому на коротком окне выручка всегда занижена — заявки не дозрели.
+ */
+function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
+  const paysBy = pplPaysByCustomer_();
+  const leads = pplRows_('RAW_leads').filter(function (l) {
+    const d = l.created_at instanceof Date
+      ? pplIsoDate_(l.created_at)
+      : String(l.created_at || '').slice(0, 10);
+    l._date = d;
+    return d >= since && d <= until && /instagram/i.test(String(l.source || ''));
+  });
+
+  const byBrand = {};
+  let withAlfa = 0, paidCustomers = 0, revenue = 0;
+  const seenCustomers = {};
+
+  leads.forEach(function (l) {
+    const brand = pplBrand_(l.pipeline);
+    const key = brand || '(вне карты направлений)';
+    if (!byBrand[key]) byBrand[key] = { brand: key, leads: 0, with_alfa: 0, paid: 0, revenue: 0 };
+    const b = byBrand[key];
+    b.leads++;
+
+    const cid = pplAlfaCustomerId_(l.alfa_url);
+    if (!cid) return;
+    withAlfa++;
+    b.with_alfa++;
+
+    // один клиент может прийти несколькими заявками — деньги считаем один раз
+    if (seenCustomers[cid]) return;
+    seenCustomers[cid] = true;
+
+    const sum = (paysBy[cid] || []).reduce(function (s, p) {
+      return p.date >= l._date ? s + p.income : s;
+    }, 0);
+    if (sum > 0) {
+      paidCustomers++;
+      revenue += sum;
+      b.paid++;
+      b.revenue += sum;
+    }
+  });
+
+  const spend = spendByPlatform.instagram;
+  const adCur = spendByPlatform.currency;
+  const rate = Number(PropertiesService.getScriptProperties().getProperty('FX_RATE') || 0);
+  const same = adCur && amoCurrency && adCur === amoCurrency;
+  const comparable = !spendByPlatform.mixed_currency && (same || rate > 0);
+  const spendInAmo = same ? spend : (rate > 0 ? spend * rate : null);
+
+  return {
+    source: 'alfa',
+    leads: leads.length,
+    with_alfa: withAlfa,
+    matched_share: leads.length ? withAlfa / leads.length : 0,
+    paid_customers: paidCustomers,
+    revenue: revenue,
+    cac: comparable && paidCustomers ? spendInAmo / paidCustomers : null,
+    roas: comparable && spendInAmo ? revenue / spendInAmo : null,
+    brands: Object.keys(byBrand).map(function (k) { return byBrand[k]; })
+      .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; })
   };
 }
 

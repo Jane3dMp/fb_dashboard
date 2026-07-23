@@ -145,6 +145,20 @@
     </div>
 
     <div class="block">
+      <h2>Окупаемость по направлениям</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Направление</th><th>Заявок</th><th>Связаны с Альфой</th>
+            <th>Заплатили</th><th>Выручка</th>
+          </tr></thead>
+          <tbody id="revenueBody"></tbody>
+        </table>
+      </div>
+      <div id="revenueNote"></div>
+    </div>
+
+    <div class="block">
       <h2>Направления: куда пришли заявки из Instagram</h2>
       <div class="table-scroll">
         <table>
@@ -289,6 +303,7 @@ function render() {
   }), { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 });
 
   renderChannel(d.channel);
+  renderRevenue(d.revenue, d.channel);
   renderPipelines(d.channel.pipelines || []);
   renderProfiles(d.profiles || []);
   renderMatchNote(d);
@@ -351,13 +366,7 @@ function renderChannel(c) {
     ig.cost_per_lead === null ? 'нет заявок за период' : adMoney(ig.cost_per_lead) + ' за заявку';
   document.getElementById('cWon').textContent = fmtInt(ig.won);
   document.getElementById('cWonSub').textContent = pct(ig.won, ig.leads) + ' от заявок';
-  // Деньги временно не показываем: см. renderMoneySourceNote — выручка
-  // считалась из поля «Бюджет» в amoCRM, а фактические оплаты живут в
-  // AlfaCRM. Показывать заниженные цифры опаснее, чем прочерк: по ним
-  // можно вырезать работающее направление.
-  document.getElementById('cRevenue').textContent = '—';
-  document.getElementById('cCac').textContent = '—';
-  document.getElementById('cRoas').textContent = '—';
+  // Деньги заполняет renderRevenue: они приходят из AlfaCRM, а не из amoCRM.
 
   const body = document.getElementById('sourcesBody');
   body.innerHTML = '';
@@ -375,6 +384,50 @@ function renderChannel(c) {
   });
 
   renderChannelNote(c);
+}
+
+/**
+ * Деньги. Приходят из AlfaCRM: в amoCRM лежит заявка и намерение, а оплаты
+ * клуб проводит в Альфе. Связка — поле «Ссылка на alfaCRM» в карточке контакта.
+ */
+function renderRevenue(r, c) {
+  if (!r) return;
+  document.getElementById('cRevenue').textContent = amoMoney(r.revenue);
+  document.getElementById('cCac').textContent = r.cac === null ? '—' : amoMoney(r.cac);
+  document.getElementById('cRoas').textContent = r.roas === null ? '—' : r.roas.toFixed(2) + '×';
+  document.getElementById('cWon').textContent = fmtInt(r.paid_customers);
+  document.getElementById('cWonSub').textContent = pct(r.paid_customers, r.leads) + ' от заявок';
+
+  const body = document.getElementById('revenueBody');
+  body.innerHTML = '';
+  (r.brands || []).forEach(b => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${b.brand}</td>
+      <td>${fmtInt(b.leads)}</td>
+      <td class="${b.with_alfa ? '' : 'zero'}">${fmtInt(b.with_alfa)}</td>
+      <td class="${b.paid ? '' : 'zero'}">${fmtInt(b.paid)}</td>
+      <td class="${b.revenue ? '' : 'zero'}">${amoMoney(b.revenue)}</td>`;
+    body.appendChild(tr);
+  });
+
+  const parts = [];
+  const share = Math.round(r.matched_share * 100);
+  if (share < 90) {
+    parts.push(`Только у <b>${share}%</b> заявок заполнена ссылка на AlfaCRM
+      (${fmtInt(r.with_alfa)} из ${fmtInt(r.leads)}). Оплаты остальных не видны,
+      поэтому выручка и ROAS — нижняя граница, а не точная цифра.`);
+  }
+  parts.push(`Период считается по дате заявки, а не по дате платежа: вопрос
+    «что принесли заявки этого периода». Поэтому на коротком окне окупаемость
+    всегда занижена — заявки не успели дозреть до оплаты. Сравнивайте 90 дней.`);
+  if (!c.currency.comparable) {
+    parts.push(`Расход в <b>${c.currency.ads || '?'}</b>, выручка в
+      <b>${c.currency.amo || '?'}</b>, курс не задан — ROAS и стоимость клиента
+      не рассчитаны. Задайте свойство скрипта <b>FX_RATE</b>.`);
+  }
+  document.getElementById('revenueNote').innerHTML =
+    `<div class="note" style="margin:16px 0 0">${parts.join('<br><br>')}</div>`;
 }
 
 /** Заявки из Instagram по воронкам: каникулы отдельно от регулярных занятий. */
@@ -440,14 +493,12 @@ function renderChannelNote(c) {
   const ig = c.instagram;
   const cur = c.currency;
 
-  // Главное предупреждение — первым. Оплаты клуб проводит в AlfaCRM,
-  // а не в amoCRM: там заявка и намерение, деньги в другой системе.
-  parts.push(`<b>Выручка, стоимость клиента и ROAS временно скрыты.</b>
-    Они считались из поля «Бюджет» сделки amoCRM, но фактические оплаты
-    проходят в AlfaCRM — значит цифры были заниженными и им нельзя верить.
-    Столбцы «Оплатили» ниже — это статус сделки в amoCRM, а не факт платежа:
-    если менеджер не двигает сделку, оплата туда не попадёт.
-    Расход, клики и количество заявок при этом настоящие.`);
+  // Столбцы «Оплатили» в таблицах ниже — это статусы amoCRM, а не деньги.
+  // Настоящие оплаты показаны выше, они приходят из AlfaCRM.
+  parts.push(`В таблицах ниже столбец «Оплатили» — это <b>статус сделки в amoCRM</b>,
+    а не факт платежа: если менеджер не двигает сделку, оплата туда не попадёт.
+    Настоящие деньги — в блоке «Окупаемость по направлениям», они берутся
+    из AlfaCRM.`);
 
   // Самое важное предупреждение: без курса CAC и ROAS не считаются вовсе.
   // Показать их «примерно» было бы хуже, чем не показать: рублёвая выручка,
