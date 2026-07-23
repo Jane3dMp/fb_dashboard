@@ -686,7 +686,10 @@ function pplEtlAlfaCustomers() {
   const seen = {};
   pplAlfaBranches_().forEach(function (branch) {
     for (var page = 0; page < 200; page++) {
-      const d = pplAlfaPage_(session, branch, 'customer', { page: page });
+      // is_study: 2 — и ученики, и лиды. Без него customer/index молча отдаёт
+      // только учеников, а записанные на пробное/абонемент часто ещё лиды —
+      // так терялся Бейманов Макар (#4994) и ещё полсотни человек на филиал.
+      const d = pplAlfaPage_(session, branch, 'customer', { page: page, is_study: 2 });
       const items = d.items || [];
       items.forEach(function (c) {
         if (seen[c.id]) return; // клиент может числиться в нескольких филиалах
