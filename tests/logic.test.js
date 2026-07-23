@@ -22,6 +22,14 @@ const sandbox = {
     getScriptProperties: () => ({ getProperty: (k) => scriptProps[k] || null })
   },
   SpreadsheetApp: {}, UrlFetchApp: {}, Utilities: {},
+  // в Apps Script карта направлений приходит из build_brands.gs через общую
+  // глобальную область; в тестах — уменьшенная копия с теми же правилами
+  BRAND_MAP: {
+    'каникулы': 'Уикенд',
+    'абонементы': 'CODDY + Прознание',
+    'регулярные занятия': 'CODDY + Прознание',
+    'детали': 'Детали'
+  },
   console
 };
 vm.createContext(sandbox);
@@ -464,6 +472,198 @@ test('пустая ссылка не роняет разбор', () => {
 
 test('ссылка без цифр даёт пусто, а не мусор', () => {
   assert.strictEqual(alfaCustomerId_('нет ссылки'), '');
+});
+
+/* ---------- нормализация телефона и дат ---------- */
+
+const normPhone_ = sandbox.pplNormPhone_;
+const anyIso_ = sandbox.pplAnyIso_;
+
+console.log('\nНормализация телефона (мост держится на ней)');
+
+test('формат Альфы «+375(29)110-27-96» приводится к E.164', () => {
+  assert.strictEqual(normPhone_('+375(29)110-27-96'), '+375291102796');
+});
+
+test('городской формат 80291234567 получает код страны', () => {
+  assert.strictEqual(normPhone_('80291234567'), '+375291234567');
+});
+
+test('локальные 9 цифр дополняются до полного номера', () => {
+  assert.strictEqual(normPhone_('291234567'), '+375291234567');
+});
+
+test('мусор и обрезки отбраковываются', () => {
+  assert.strictEqual(normPhone_('335'), '');
+  assert.strictEqual(normPhone_(''), '');
+  assert.strictEqual(normPhone_(null), '');
+});
+
+console.log('\nДаты из ячеек листа');
+
+test('объект Date превращается в ISO', () => {
+  assert.strictEqual(anyIso_(new Date(2026, 6, 15)), '2026-07-15');
+});
+
+test('формат Альфы «ДД.ММ.ГГГГ» разворачивается в ISO', () => {
+  assert.strictEqual(anyIso_('15.07.2026'), '2026-07-15');
+});
+
+test('ISO-строка с временем обрезается до даты', () => {
+  assert.strictEqual(anyIso_('2026-07-15T10:00:00Z'), '2026-07-15');
+});
+
+test('нечитаемое значение даёт пусто, а не NaN', () => {
+  assert.strictEqual(anyIso_('вчера'), '');
+  assert.strictEqual(anyIso_(''), '');
+});
+
+/* ---------- ядро выручки: мост по телефону ---------- */
+
+const revenueCore_ = sandbox.pplAlfaRevenueCore_;
+
+console.log('\nВыручка из Альфы: мост по телефону');
+
+const igLead = (over) => Object.assign({
+  created_at: '2026-07-10', phone_e164: '+375291102796', source: 'Instagram',
+  pipeline: 'Каникулы', alfa_url: ''
+}, over);
+const customer = (id, phones) => ({ customer_id: id, branches: '4', phones: phones, amo_contact_id: '', created_at: '' });
+const pay = (cid, date, income, payId) => ({
+  document_date: date, customer_id: cid, income: income, branch: '4',
+  pay_item_id: '', payer_name: '', pay_id: payId
+});
+
+test('заявка находит клиента по телефону, платёж после заявки считается', () => {
+  const r = revenueCore_(
+    [igLead({})],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 1);
+  assert.strictEqual(r.paid_customers, 1);
+  assert.strictEqual(r.revenue, 250);
+  assert.strictEqual(r.brands[0].brand, 'Уикенд');
+});
+
+test('платёж раньше заявки не приписывается рекламе', () => {
+  const r = revenueCore_(
+    [igLead({ created_at: '2026-07-10' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '05.07.2026', 999, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 1, 'клиент найден');
+  assert.strictEqual(r.revenue, 0, 'но его старые деньги — не заслуга рекламы');
+});
+
+test('заявка без телефона честно остаётся несвязанной', () => {
+  const r = revenueCore_(
+    [igLead({ phone_e164: '' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.leads, 1);
+  assert.strictEqual(r.with_phone, 0);
+  assert.strictEqual(r.with_alfa, 0);
+  assert.strictEqual(r.revenue, 0);
+});
+
+test('семья: два ребёнка на одном номере — деньги обоих, но один раз', () => {
+  const r = revenueCore_(
+    [igLead({})],
+    [customer(101, '+375291102796'), customer(102, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1'), pay(102, '20.07.2026', 300, 'p2')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.paid_customers, 1, 'семья считается одной оплатившей заявкой');
+  assert.strictEqual(r.revenue, 550);
+});
+
+test('повторная заявка того же клиента деньги не задваивает', () => {
+  const r = revenueCore_(
+    [igLead({ created_at: '2026-07-10' }), igLead({ created_at: '2026-07-12' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 2, 'обе заявки связаны');
+  assert.strictEqual(r.paid_customers, 1);
+  assert.strictEqual(r.revenue, 250, 'платёж учтён один раз');
+});
+
+test('дубль платежа с тем же pay_id считается один раз', () => {
+  const r = revenueCore_(
+    [igLead({})],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p7'), pay(101, '15.07.2026', 250, 'p7')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.revenue, 250, 'зеркальные филиалы не должны задваивать сумму');
+});
+
+test('у клиента несколько номеров через точку с запятой — работает любой', () => {
+  const r = revenueCore_(
+    [igLead({ phone_e164: '+375447123292' })],
+    [customer(101, '+375291102796;+375447123292')],
+    [pay(101, '15.07.2026', 100, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 1);
+  assert.strictEqual(r.revenue, 100);
+});
+
+test('заполненная ссылка на Альфу приоритетнее телефона', () => {
+  const r = revenueCore_(
+    [igLead({ alfa_url: 'https://proznanie4eee.s20.online/#/customer/777' })],
+    [customer(101, '+375291102796')],
+    [pay(777, '15.07.2026', 400, 'p1'), pay(101, '15.07.2026', 100, 'p2')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.revenue, 400, 'деньги взяты у клиента из ссылки, а не по телефону');
+});
+
+test('воронка вне карты направлений видна отдельной строкой', () => {
+  const r = revenueCore_(
+    [igLead({ pipeline: 'Тест' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 50, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.brands[0].brand, '(вне карты направлений)');
+});
+
+test('заявка не из Instagram в расчёт не попадает', () => {
+  const r = revenueCore_(
+    [igLead({ source: 'Звонок' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.leads, 0);
+  assert.strictEqual(r.revenue, 0);
+});
+
+test('заявка вне периода в расчёт не попадает', () => {
+  const r = revenueCore_(
+    [igLead({ created_at: '2026-06-10' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.leads, 0);
+});
+
+test('даты-объекты из листа сравниваются с датой заявки правильно', () => {
+  const r = revenueCore_(
+    [igLead({ created_at: new Date(2026, 6, 10) })],
+    [customer(101, '+375291102796')],
+    [pay(101, new Date(2026, 6, 15), 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.revenue, 250);
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

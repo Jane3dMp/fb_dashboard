@@ -39,7 +39,8 @@ const AMO_LOST = 143;
  *
  * Часы разнесены намеренно: сначала данные, потом витрины. Склеивать всё
  * в одну функцию нельзя — у Apps Script лимит выполнения 6 минут, а в
- * RAW_pays 25 тысяч строк, цепочка оборвалась бы на середине и молча.
+ * RAW_pays под тридцать тысяч строк, цепочка оборвалась бы на середине
+ * и молча.
  *
  * Имя без подчёркивания на конце: приватные функции не видны в списке
  * запуска редактора, и запустить её вручную было бы нечем.
@@ -47,14 +48,18 @@ const AMO_LOST = 143;
  * Повторный запуск безопасен — свои прежние триггеры сносим, дублей нет.
  */
 function pplSetupDailyTriggers() {
-  // backfillAlpha, а не dumpAlfaPay: последняя — диагностика, тянет одну
-  // страницу в лог и в таблицу не пишет. И не loadAlphaMonth: та требует
-  // месяц аргументом, а триггер аргументы не передаёт.
-  var plan = [['runAmoEtl',5],['backfillAlpha',6],['dumpAlfaLinks',7],['buildMart',8],['buildChannel',9],['buildBrands',10],['buildKanikulySverka',11]];
-  var want = {};
-  plan.forEach(function (p) { want[p[0]] = true; });
+  // Платежи собирает pplRebuildPays, а не backfillAlpha: у той фильтр по
+  // датам не работал (Альфа ждёт date_from, а не document_date_from), и
+  // каждый «месяц» дописывал в лист всю историю целиком ещё раз.
+  // dumpAlfaLinks из расписания убран — это диагностика, пишет только в лог.
+  var plan = [['pplEtlAlfaCustomers',4],['runAmoEtl',5],['pplRebuildPays',6],['buildMart',8],['buildChannel',9],['buildBrands',10],['buildKanikulySverka',11]];
+  // то, что раньше стояло в расписании, а теперь из него выведено
+  var retired = ['backfillAlpha', 'dumpAlfaLinks'];
+  var drop = {};
+  plan.forEach(function (p) { drop[p[0]] = true; });
+  retired.forEach(function (n) { drop[n] = true; });
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (want[t.getHandlerFunction()]) ScriptApp.deleteTrigger(t);
+    if (drop[t.getHandlerFunction()]) ScriptApp.deleteTrigger(t);
   });
   plan.forEach(function (p) {
     ScriptApp.newTrigger(p[0]).timeBased().atHour(p[1]).everyDays(1).create();
@@ -584,73 +589,289 @@ function pplAlfaCustomerId_(url) {
   return digits && digits.length ? digits[digits.length - 1] : '';
 }
 
-/** Платежи Альфы, сгруппированные по клиенту. */
-function pplPaysByCustomer_() {
-  const acc = {};
-  pplRows_('RAW_pays').forEach(function (r) {
-    const id = String(r.customer_id || '').trim();
-    if (!id) return;
-    const d = r.document_date instanceof Date
-      ? pplIsoDate_(r.document_date)
-      : String(r.document_date || '').slice(0, 10);
-    if (!acc[id]) acc[id] = [];
-    acc[id].push({ date: d, income: Number(r.income || 0) });
-  });
-  return acc;
+/**
+ * Дата из ячейки листа в виде ГГГГ-ММ-ДД, откуда бы она ни пришла.
+ *
+ * В листах даты живут в трёх видах: объект Date (Sheets распарсил ячейку),
+ * строка «ДД.ММ.ГГГГ» (так отдаёт Альфа) и ISO-строка (так пишет etl_amo).
+ * Сравнивать периоды можно только приведя всё к одному виду; иначе
+ * «31.05.2026» >= «2026-05-01» сравнится по алфавиту и молча соврёт.
+ * Без Utilities: этому хелперу нужно работать и в Node-тестах.
+ */
+function pplAnyIso_(v) {
+  // не instanceof: Date из другого контекста выполнения (vm в тестах)
+  // им не распознаётся, а поведение нужно одинаковое везде
+  if (v && typeof v.getFullYear === 'function') {
+    return v.getFullYear() + '-' + ('0' + (v.getMonth() + 1)).slice(-2) + '-' + ('0' + v.getDate()).slice(-2);
+  }
+  const s = String(v || '');
+  const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
+  const dot = s.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  if (dot) return dot[3] + '-' + dot[2] + '-' + dot[1];
+  return '';
 }
 
 /**
- * Выручка по заявкам из Instagram — по фактическим оплатам в AlfaCRM.
- *
- * Считаем так: берём заявки периода с источником Instagram, у каждой через
- * alfa_url находим клиента Альфы и суммируем его платежи, сделанные НЕ РАНЬШЕ
- * даты заявки. Платёж до появления заявки рекламой не вызван — это уже
- * действующий клиент, и приписывать его объявлению нельзя.
- *
- * Период считается по дате заявки, а не по дате платежа: вопрос звучит
- * «что принесли заявки этого периода», а не «сколько денег пришло в кассу».
- * Поэтому на коротком окне выручка всегда занижена — заявки не дозрели.
+ * Нормализация телефона к +375XXXXXXXXX — та же логика, что в normalizePhone_
+ * из etl_amo.gs, которая заполняет phone_e164 в RAW_leads. Мост между заявкой
+ * и клиентом Альфы держится на том, что обе стороны нормализованы одинаково.
+ * Своя копия с префиксом ppl — чтобы не зависеть от чужого файла и гоняться
+ * в Node.
  */
-function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
-  const paysBy = pplPaysByCustomer_();
-  const leads = pplRows_('RAW_leads').filter(function (l) {
-    const d = l.created_at instanceof Date
-      ? pplIsoDate_(l.created_at)
-      : String(l.created_at || '').slice(0, 10);
+function pplNormPhone_(raw) {
+  if (!raw) return '';
+  var d = String(raw).replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 11 && d.slice(0, 2) === '80') d = '375' + d.slice(2);
+  else if (d.length === 9) d = '375' + d;
+  if (d.length < 11) return '';
+  return '+' + d;
+}
+
+/* --- Доступ к API Альфы. Свои хелперы с префиксом ppl: похожие есть в
+ * kanikuly_sverka.gs и Etl alpha.gs, но сигнатуры у них другие, а общая
+ * глобальная область проекта уже приводила к столкновениям имён. --- */
+
+function pplAlfaSession_() {
+  const host = PropertiesService.getScriptProperties().getProperty('ALFA_HOST') || 'proznanie4eee.s20.online';
+  const resp = UrlFetchApp.fetch('https://' + host + '/v2api/auth/login', {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify({ email: pplProp_('ALFA_EMAIL'), api_key: pplProp_('ALFA_APIKEY') }),
+    muteHttpExceptions: true
+  });
+  const token = JSON.parse(resp.getContentText()).token;
+  if (!token) throw new Error('Альфа не пустила: ' + resp.getContentText().slice(0, 150));
+  return { host: host, token: token };
+}
+
+function pplAlfaPage_(session, branch, entity, body) {
+  const resp = UrlFetchApp.fetch('https://' + session.host + '/v2api/' + branch + '/' + entity + '/index', {
+    method: 'post', contentType: 'application/json',
+    headers: { 'X-ALFACRM-TOKEN': session.token },
+    payload: JSON.stringify(body), muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('Альфа ' + entity + '/' + branch + ': ' + resp.getResponseCode() + ' ' + resp.getContentText().slice(0, 150));
+  }
+  return JSON.parse(resp.getContentText());
+}
+
+/**
+ * Филиалы, из которых берём данные. Филиал 3 («Якубовского, 90») сюда
+ * включать нельзя: он зеркалит филиал 1 — те же клиенты и те же платежи
+ * с теми же id, сумма задвоится. Проверено прямым сравнением по API.
+ */
+function pplAlfaBranches_() {
+  return (PropertiesService.getScriptProperties().getProperty('ALFA_BRANCHES') || '1,2')
+    .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
+/**
+ * Ежедневная выгрузка клиентов Альфы → лист RAW_alfa_customers.
+ *
+ * Это вторая половина моста «заявка → деньги»: связь заявки с клиентом
+ * строится по телефону, а телефоны клиентов живут только в Альфе.
+ * Поле контакта amoCRM «(X) Ссылка на alfaCRM» пусто у всех заявок,
+ * а обратное поле Альфы custom_url_amo_client пусто у всех клиентов —
+ * проверено по API, надеяться на них нельзя.
+ *
+ * Попутно сохраняем id контакта amoCRM из стандартного поля web (его
+ * заполняет интеграция примерно у пятой части клиентов) — пригодится,
+ * если однажды в RAW_leads появятся id контактов для точной сверки.
+ */
+function pplEtlAlfaCustomers() {
+  const session = pplAlfaSession_();
+  const rows = [];
+  const seen = {};
+  pplAlfaBranches_().forEach(function (branch) {
+    for (var page = 0; page < 200; page++) {
+      const d = pplAlfaPage_(session, branch, 'customer', { page: page });
+      const items = d.items || [];
+      items.forEach(function (c) {
+        if (seen[c.id]) return; // клиент может числиться в нескольких филиалах
+        seen[c.id] = true;
+        const phones = (c.phone || []).map(pplNormPhone_).filter(function (v, i, arr) {
+          return v && arr.indexOf(v) === i;
+        });
+        const amoContact = ((c.web || []).map(function (u) {
+          const m = String(u).match(/amocrm\.ru\/contacts\/detail\/(\d+)/);
+          return m ? m[1] : '';
+        }).filter(Boolean))[0] || '';
+        rows.push([c.id, (c.branch_ids || [branch]).join(';'), phones.join(';'), amoContact, String(c.created_at || '')]);
+      });
+      if (items.length < 50) break;
+    }
+  });
+
+  const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
+  const sh = ss.getSheetByName('RAW_alfa_customers') || ss.insertSheet('RAW_alfa_customers');
+  sh.clearContents();
+  const header = ['customer_id', 'branches', 'phones', 'amo_contact_id', 'created_at'];
+  sh.getRange(1, 1, 1, header.length).setValues([header]);
+  if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
+  Logger.log('RAW_alfa_customers: ' + rows.length + ' клиентов');
+}
+
+/**
+ * Ежедневный полный пересбор листа RAW_pays из Альфы.
+ *
+ * Именно пересбор, а не догрузка месяцев, и вот почему. Старая схема
+ * (loadAlphaMonth + backfillAlpha) сломана дважды: фильтр по датам она
+ * передавала как document_date_from/to, которые Альфа молча игнорирует
+ * (рабочие имена — date_from/date_to), поэтому каждый «месяц» тянул всю
+ * историю целиком; а отметка загруженного месяца сравнивала строку
+ * «2026-07» с датой, в которую Sheets превратил ячейку, никогда не
+ * совпадала — и текущий месяц дописывался заново каждый день. Итог в
+ * листе: история в трёх экземплярах. Полный пересбор дешёв (одна-две
+ * минуты), самовосстанавливается и не требует вести учёт месяцев.
+ *
+ * Только доходы (pay_type_id 1), дедупликация по pay_id: id платежа
+ * в Альфе глобальный, у филиалов-зеркал он один и тот же.
+ */
+function pplRebuildPays() {
+  const session = pplAlfaSession_();
+  const rows = [];
+  const seen = {};
+  pplAlfaBranches_().forEach(function (branch) {
+    for (var page = 0; page < 800; page++) {
+      const d = pplAlfaPage_(session, branch, 'pay', { page: page, pay_type_id: 1 });
+      const items = d.items || [];
+      items.forEach(function (it) {
+        if (it.pay_type_id !== 1) return; // страховка на случай поломки фильтра
+        if (it.id && seen[it.id]) return;
+        if (it.id) seen[it.id] = true;
+        rows.push([
+          it.document_date,
+          it.customer_id,
+          Number(it.income || 0),
+          branch,
+          it.pay_item_id || '',
+          it.payer_name || '',
+          it.id
+        ]);
+      });
+      if (items.length < 50) break;
+    }
+  });
+
+  // Если Альфа вдруг отдала подозрительно мало, лист не трогаем: пусть
+  // лучше останутся вчерашние данные, чем пустая витрина.
+  if (rows.length < 1000) throw new Error('Альфа отдала всего ' + rows.length + ' платежей — лист не перезаписываем');
+
+  const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
+  const sh = ss.getSheetByName('RAW_pays') || ss.insertSheet('RAW_pays');
+  sh.clearContents();
+  const header = ['document_date', 'customer_id', 'income', 'branch', 'pay_item_id', 'payer_name', 'pay_id'];
+  sh.getRange(1, 1, 1, header.length).setValues([header]);
+  sh.getRange(2, 1, rows.length, header.length).setValues(rows);
+  Logger.log('RAW_pays: ' + rows.length + ' платежей из филиалов ' + pplAlfaBranches_().join(','));
+}
+
+/**
+ * Чистое ядро расчёта выручки: (заявки, клиенты Альфы, платежи) → цифры.
+ * Отделено от чтения листов, чтобы гоняться в Node-тестах.
+ *
+ * Мост между заявкой и клиентом Альфы двухступенчатый:
+ *   1) ссылка на Альфу из карточки amo (alfa_url) — сейчас пуста у всех,
+ *      но если поле начнут заполнять, связка подхватится сама;
+ *   2) телефон: phone_e164 заявки против нормализованных номеров клиента.
+ * По одному телефону может найтись несколько клиентов (семья: дети
+ * заведены отдельными карточками) — деньги каждого считаются один раз.
+ *
+ * Платежи клиента суммируются начиная с даты заявки: платёж раньше заявки
+ * рекламой не вызван, это действующий клиент. Период — по дате заявки,
+ * а не платежа: вопрос «что принесли заявки этого периода». Поэтому на
+ * коротком окне выручка всегда занижена — заявки не дозрели.
+ */
+function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
+  // телефон → клиенты с этим номером
+  const byPhone = {};
+  customers.forEach(function (c) {
+    String(c.phones || '').split(';').forEach(function (ph) {
+      if (!ph) return;
+      if (!byPhone[ph]) byPhone[ph] = [];
+      byPhone[ph].push(String(c.customer_id));
+    });
+  });
+
+  // клиент → платежи; дедупликация по pay_id — филиалы-зеркала Альфы
+  // отдают один платёж под одним id, задваивать его нельзя
+  const paysBy = {};
+  const seenPay = {};
+  pays.forEach(function (r) {
+    const id = String(r.customer_id || '').trim();
+    if (!id) return;
+    const payId = String(r.pay_id || '');
+    if (payId) {
+      if (seenPay[payId]) return;
+      seenPay[payId] = true;
+    }
+    if (!paysBy[id]) paysBy[id] = [];
+    paysBy[id].push({ date: pplAnyIso_(r.document_date), income: Number(r.income || 0) });
+  });
+
+  const inPeriod = leads.filter(function (l) {
+    const d = pplAnyIso_(l.created_at);
     l._date = d;
     return d >= since && d <= until && /instagram/i.test(String(l.source || ''));
   });
 
   const byBrand = {};
-  let withAlfa = 0, paidCustomers = 0, revenue = 0;
+  let withPhone = 0, withAlfa = 0, paidCustomers = 0, revenue = 0;
   const seenCustomers = {};
 
-  leads.forEach(function (l) {
+  inPeriod.forEach(function (l) {
     const brand = pplBrand_(l.pipeline);
     const key = brand || '(вне карты направлений)';
     if (!byBrand[key]) byBrand[key] = { brand: key, leads: 0, with_alfa: 0, paid: 0, revenue: 0 };
     const b = byBrand[key];
     b.leads++;
 
-    const cid = pplAlfaCustomerId_(l.alfa_url);
-    if (!cid) return;
+    const phone = pplNormPhone_(l.phone_e164);
+    if (phone) withPhone++;
+
+    const linked = pplAlfaCustomerId_(l.alfa_url);
+    const ids = linked ? [linked] : ((phone && byPhone[phone]) || []);
+    if (!ids.length) return;
+
     withAlfa++;
     b.with_alfa++;
 
     // один клиент может прийти несколькими заявками — деньги считаем один раз
-    if (seenCustomers[cid]) return;
-    seenCustomers[cid] = true;
-
-    const sum = (paysBy[cid] || []).reduce(function (s, p) {
-      return p.date >= l._date ? s + p.income : s;
-    }, 0);
-    if (sum > 0) {
+    let sum = 0, hasNew = false;
+    ids.forEach(function (cid) {
+      if (seenCustomers[cid]) return;
+      seenCustomers[cid] = true;
+      hasNew = true;
+      (paysBy[cid] || []).forEach(function (p) {
+        if (p.date && p.date >= l._date) sum += p.income;
+      });
+    });
+    if (hasNew && sum > 0) {
       paidCustomers++;
       revenue += sum;
       b.paid++;
       b.revenue += sum;
     }
   });
+
+  return {
+    leads: inPeriod.length,
+    with_phone: withPhone,
+    with_alfa: withAlfa,
+    matched_share: inPeriod.length ? withAlfa / inPeriod.length : 0,
+    paid_customers: paidCustomers,
+    revenue: revenue,
+    brands: Object.keys(byBrand).map(function (k) { return byBrand[k]; })
+      .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; })
+  };
+}
+
+/** Выручка по заявкам из Instagram — по фактическим оплатам в AlfaCRM. */
+function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
+  const customers = pplRows_('RAW_alfa_customers');
+  const core = pplAlfaRevenueCore_(pplRows_('RAW_leads'), customers, pplRows_('RAW_pays'), since, until);
 
   const spend = spendByPlatform.instagram;
   const adCur = spendByPlatform.currency;
@@ -661,15 +882,17 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
 
   return {
     source: 'alfa',
-    leads: leads.length,
-    with_alfa: withAlfa,
-    matched_share: leads.length ? withAlfa / leads.length : 0,
-    paid_customers: paidCustomers,
-    revenue: revenue,
-    cac: comparable && paidCustomers ? spendInAmo / paidCustomers : null,
-    roas: comparable && spendInAmo ? revenue / spendInAmo : null,
-    brands: Object.keys(byBrand).map(function (k) { return byBrand[k]; })
-      .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; })
+    // страница по mode отличает «клиенты ещё не выгружались» от «связи нет»
+    mode: customers.length ? 'phone' : 'no_customers',
+    leads: core.leads,
+    with_phone: core.with_phone,
+    with_alfa: core.with_alfa,
+    matched_share: core.matched_share,
+    paid_customers: core.paid_customers,
+    revenue: core.revenue,
+    cac: comparable && core.paid_customers ? spendInAmo / core.paid_customers : null,
+    roas: comparable && spendInAmo ? core.revenue / spendInAmo : null,
+    brands: core.brands
   };
 }
 
