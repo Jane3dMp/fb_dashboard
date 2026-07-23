@@ -772,10 +772,12 @@ function pplRebuildPays() {
  * Чистое ядро расчёта выручки: (заявки, клиенты Альфы, платежи) → цифры.
  * Отделено от чтения листов, чтобы гоняться в Node-тестах.
  *
- * Мост между заявкой и клиентом Альфы двухступенчатый:
+ * Мост между заявкой и клиентом Альфы трёхступенчатый, от точного к общему:
  *   1) ссылка на Альфу из карточки amo (alfa_url) — сейчас пуста у всех,
  *      но если поле начнут заполнять, связка подхватится сама;
- *   2) телефон: phone_e164 заявки против нормализованных номеров клиента.
+ *   2) id контакта amo: у части клиентов Альфы интеграция кладёт ссылку
+ *      на контакт в поле web (колонка amo_contact_id в RAW_alfa_customers);
+ *   3) телефон: phone_e164 заявки против нормализованных номеров клиента.
  * По одному телефону может найтись несколько клиентов (семья: дети
  * заведены отдельными карточками) — деньги каждого считаются один раз.
  *
@@ -785,14 +787,20 @@ function pplRebuildPays() {
  * коротком окне выручка всегда занижена — заявки не дозрели.
  */
 function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
-  // телефон → клиенты с этим номером
+  // телефон → клиенты с этим номером; контакт amo → клиенты с этой ссылкой
   const byPhone = {};
+  const byContact = {};
   customers.forEach(function (c) {
     String(c.phones || '').split(';').forEach(function (ph) {
       if (!ph) return;
       if (!byPhone[ph]) byPhone[ph] = [];
       byPhone[ph].push(String(c.customer_id));
     });
+    const ac = String(c.amo_contact_id || '').trim();
+    if (ac) {
+      if (!byContact[ac]) byContact[ac] = [];
+      byContact[ac].push(String(c.customer_id));
+    }
   });
 
   // клиент → платежи; дедупликация по pay_id — филиалы-зеркала Альфы
@@ -832,7 +840,11 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     if (phone) withPhone++;
 
     const linked = pplAlfaCustomerId_(l.alfa_url);
-    const ids = linked ? [linked] : ((phone && byPhone[phone]) || []);
+    const contact = String(l.contact_id || '').trim();
+    let ids;
+    if (linked) ids = [linked];
+    else if (contact && byContact[contact]) ids = byContact[contact];
+    else ids = (phone && byPhone[phone]) || [];
     if (!ids.length) return;
 
     withAlfa++;

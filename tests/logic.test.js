@@ -526,9 +526,12 @@ console.log('\nВыручка из Альфы: мост по телефону');
 
 const igLead = (over) => Object.assign({
   created_at: '2026-07-10', phone_e164: '+375291102796', source: 'Instagram',
-  pipeline: 'Каникулы', alfa_url: ''
+  pipeline: 'Каникулы', alfa_url: '', contact_id: ''
 }, over);
-const customer = (id, phones) => ({ customer_id: id, branches: '4', phones: phones, amo_contact_id: '', created_at: '' });
+const customer = (id, phones, amoContact) => ({
+  customer_id: id, branches: '4', phones: phones,
+  amo_contact_id: amoContact || '', created_at: ''
+});
 const pay = (cid, date, income, payId) => ({
   document_date: date, customer_id: cid, income: income, branch: '4',
   pay_item_id: '', payer_name: '', pay_id: payId
@@ -623,6 +626,38 @@ test('заполненная ссылка на Альфу приоритетне
     '2026-07-01', '2026-07-31'
   );
   assert.strictEqual(r.revenue, 400, 'деньги взяты у клиента из ссылки, а не по телефону');
+});
+
+test('заявка без телефона находит клиента по id контакта amo', () => {
+  const r = revenueCore_(
+    [igLead({ phone_e164: '', contact_id: '40464221' })],
+    [customer(101, '', '40464221')],
+    [pay(101, '15.07.2026', 300, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 1);
+  assert.strictEqual(r.revenue, 300);
+});
+
+test('контакт amo приоритетнее телефона', () => {
+  const r = revenueCore_(
+    [igLead({ contact_id: '40464221' })],   // телефон тоже задан, но контакт точнее
+    [customer(101, '+375291102796'), customer(202, '', '40464221')],
+    [pay(101, '15.07.2026', 100, 'p1'), pay(202, '15.07.2026', 500, 'p2')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.revenue, 500, 'деньги клиента, привязанного по контакту');
+});
+
+test('неизвестный контакт не мешает мосту по телефону', () => {
+  const r = revenueCore_(
+    [igLead({ contact_id: '99999999' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.with_alfa, 1, 'телефон остаётся запасным путём');
+  assert.strictEqual(r.revenue, 250);
 });
 
 test('воронка вне карты направлений видна отдельной строкой', () => {
