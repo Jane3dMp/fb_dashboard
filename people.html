@@ -122,6 +122,7 @@
       по <input type="date" id="dateTo">
       <button id="btnPeriod">Показать период</button>
     </span>
+    <button id="btnFresh" title="Пересчитать прямо сейчас, минуя кэш: свежие заявки и платежи подтягиваются из CRM">⟳ Обновить сейчас</button>
     <button class="right" id="btnNames">Показать имена</button>
   </div>
 
@@ -262,25 +263,27 @@ document.getElementById('btnPeriod').addEventListener('click', () => {
   loadData();
 });
 
+document.getElementById('btnFresh').addEventListener('click', () => loadData(true));
+
 document.getElementById('btnNames').addEventListener('click', () => {
   showNames = !showNames;
   document.getElementById('btnNames').textContent = showNames ? 'Скрыть имена' : 'Показать имена';
   if (lastData) render();
 });
 
-async function loadData() {
+async function loadData(fresh) {
   const status = document.getElementById('status');
   const content = document.getElementById('content');
   status.style.display = 'block';
   status.className = '';
-  status.textContent = 'Загрузка…';
+  status.textContent = fresh ? 'Пересчитываю по свежим данным CRM…' : 'Загрузка…';
   content.style.display = 'none';
 
   try {
     const q = currentPeriod.days
       ? 'days=' + currentPeriod.days
       : 'since=' + currentPeriod.since + '&until=' + currentPeriod.until;
-    lastData = await api('view=people&' + q);
+    lastData = await api('view=people&' + q + (fresh ? '&nocache=1' : ''));
     // Старый бэкенд про view=people ещё не знает и молча отдаёт данные
     // по расходу — без этой проверки страница падала бы с невнятным
     // «Cannot read properties of undefined»

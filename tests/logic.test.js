@@ -518,6 +518,41 @@ test('нечитаемое значение даёт пусто, а не NaN', (
   assert.strictEqual(anyIso_(''), '');
 });
 
+/* ---------- слияние утреннего листа с живой дельтой ---------- */
+
+const mergeRows_ = sandbox.pplMergeRows_;
+
+console.log('\nЖивая дельта поверх утреннего листа');
+
+test('строка дельты заменяет листовую с тем же ключом', () => {
+  const merged = mergeRows_(
+    [{ lead_id: 1, source: '' }, { lead_id: 2, source: 'Звонок' }],
+    [{ lead_id: 1, source: 'Instagram' }],
+    'lead_id'
+  );
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].source, 'Instagram', 'менеджер проставил источник — дельта победила');
+});
+
+test('новые строки дельты добавляются', () => {
+  const merged = mergeRows_(
+    [{ pay_id: 'p1', income: 100 }],
+    [{ pay_id: 'p2', income: 200 }],
+    'pay_id'
+  );
+  assert.strictEqual(merged.length, 2);
+});
+
+test('пустая дельта возвращает лист без изменений', () => {
+  const base = [{ lead_id: 1 }];
+  assert.strictEqual(mergeRows_(base, [], 'lead_id'), base);
+});
+
+test('строки без ключа в дельте игнорируются', () => {
+  const merged = mergeRows_([{ lead_id: 1 }], [{ lead_id: '' }, { lead_id: 2 }], 'lead_id');
+  assert.strictEqual(merged.length, 2);
+});
+
 /* ---------- ядро выручки: мост по телефону ---------- */
 
 const revenueCore_ = sandbox.pplAlfaRevenueCore_;

@@ -107,6 +107,7 @@ function buildPeople(params) {
 
   const byPlatform = pplFetchSpendByPlatform_(since, until);
   const amoCurrency = pplFetchAmoCurrency_();
+  const pipelineNames = pplFetchPipelines_();
 
   const out = {
     view: 'people',
@@ -116,16 +117,18 @@ function buildPeople(params) {
     matching: pplMatchingMode_(),
     people: people,
     ads: ads,
-    channel: pplChannelSummary_(leads, byPlatform, until, amoCurrency, pplFetchPipelines_()),
+    channel: pplChannelSummary_(leads, byPlatform, until, amoCurrency, pipelineNames),
     profiles: pplFetchSpendByProfile_(spendByAd),
-    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency)
+    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency, pipelineNames)
   };
 
   // 100 КБ — потолок значения в CacheService. Список людей может его
   // пробить, и тогда просто не кэшируем: терять данные ради кэша нельзя.
+  // 10 минут, а не 30: деньги теперь добирают живую дельту из amo и Альфы,
+  // и долгий кэш съедал бы её актуальность.
   try {
     const json = JSON.stringify(out);
-    if (json.length < 100000) cache.put(cacheKey, json, 1800);
+    if (json.length < 100000) cache.put(cacheKey, json, 600);
   } catch (e) { /* кэш — не то, ради чего стоит ронять ответ */ }
 
   return out;
@@ -989,10 +992,136 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
   };
 }
 
+/**
+ * Слияние утреннего листа с живой дельтой: строки дельты заменяют листовые
+ * с тем же ключом, новые добавляются. Чистая функция — гоняется в Node.
+ */
+function pplMergeRows_(base, live, key) {
+  if (!live || !live.length) return base;
+  const idx = {};
+  base.forEach(function (r, i) {
+    const k = String(r[key] == null ? '' : r[key]);
+    if (k) idx[k] = i;
+  });
+  const out = base.slice();
+  live.forEach(function (r) {
+    const k = String(r[key] == null ? '' : r[key]);
+    if (!k) return;
+    if (Object.prototype.hasOwnProperty.call(idx, k)) out[idx[k]] = r;
+    else out.push(r);
+  });
+  return out;
+}
+
+/** Поля amoCRM, которые нужны живой дельте (те же id, что в etl_amo.gs). */
+const PPL_AMO_PHONE_FIELD = 1648707;
+const PPL_AMO_ALFA_FIELD = 1652617;
+
+/**
+ * Живая дельта заявок: сделки amoCRM, изменённые сегодня. Листы снимаются
+ * в 5 утра, а менеджеры проставляют «Источник заявки» и телефоны в течение
+ * дня — без дельты страница до завтра показывала бы утреннюю картину.
+ * Возвращает строки в формате RAW_leads.
+ */
+function pplLiveLeadRows_(pipelineNames) {
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
+  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') }, muteHttpExceptions: true };
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const from = Math.floor(midnight.getTime() / 1000);
+
+  const leads = [];
+  for (let page = 1; page <= 4; page++) {
+    const resp = UrlFetchApp.fetch(base + '/leads?with=contacts&limit=250&page=' + page +
+      '&filter[updated_at][from]=' + from, auth);
+    if (resp.getResponseCode() !== 200) break;
+    const chunk = ((JSON.parse(resp.getContentText())._embedded || {}).leads) || [];
+    chunk.forEach(function (l) { leads.push(l); });
+    if (chunk.length < 250) break;
+  }
+  if (!leads.length) return [];
+
+  // телефоны и ссылку на Альфу добираем из контактов, как это делает etl_amo
+  const contactIds = [];
+  leads.forEach(function (l) {
+    const cs = (l._embedded && l._embedded.contacts) || [];
+    if (cs.length && contactIds.indexOf(cs[0].id) === -1) contactIds.push(cs[0].id);
+  });
+  const byContact = {};
+  for (let i = 0; i < contactIds.length; i += 50) {
+    const chunk = contactIds.slice(i, i + 50);
+    const q = chunk.map(function (id) { return 'filter[id][]=' + id; }).join('&');
+    const resp = UrlFetchApp.fetch(base + '/contacts?' + q + '&limit=50', auth);
+    if (resp.getResponseCode() !== 200) continue;
+    (((JSON.parse(resp.getContentText())._embedded) || {}).contacts || []).forEach(function (c) {
+      let phone = '', alfa = '';
+      (c.custom_fields_values || []).forEach(function (f) {
+        const v = (f.values && f.values[0] && String(f.values[0].value || '')) || '';
+        if (f.field_id === PPL_AMO_PHONE_FIELD) phone = v;
+        if (f.field_id === PPL_AMO_ALFA_FIELD) alfa = v;
+      });
+      byContact[c.id] = { phone: pplNormPhone_(phone), alfa: alfa };
+    });
+  }
+
+  return leads.map(function (l) {
+    const cs = (l._embedded && l._embedded.contacts) || [];
+    const cid = cs.length ? cs[0].id : '';
+    const cd = byContact[cid] || {};
+    return {
+      created_at: new Date(l.created_at * 1000).toISOString(),
+      phone_e164: cd.phone || '',
+      source: pplLeadSource_(l),
+      pipeline: (pipelineNames && pipelineNames[l.pipeline_id]) || String(l.pipeline_id || ''),
+      alfa_url: cd.alfa || '',
+      lead_id: l.id,
+      contact_id: cid
+    };
+  });
+}
+
+/**
+ * Живая дельта платежей: доходы Альфы за последние два дня. Фильтр
+ * date_from у Альфы рабочий (в отличие от document_date_from), объём
+ * крошечный. Формат строк — как в RAW_pays.
+ */
+function pplLivePayRows_() {
+  const session = pplAlfaSession_();
+  const d = new Date(Date.now() - 2 * 86400000);
+  const dateFrom = ('0' + d.getDate()).slice(-2) + '.' + ('0' + (d.getMonth() + 1)).slice(-2) + '.' + d.getFullYear();
+  const rows = [];
+  pplAlfaBranches_().forEach(function (branch) {
+    for (let page = 0; page < 4; page++) {
+      const data = pplAlfaPage_(session, branch, 'pay', { page: page, pay_type_id: 1, date_from: dateFrom });
+      const items = data.items || [];
+      items.forEach(function (it) {
+        if (it.pay_type_id !== 1) return;
+        rows.push({
+          document_date: it.document_date,
+          customer_id: it.customer_id,
+          income: Number(it.income || 0),
+          branch: branch,
+          pay_item_id: it.pay_item_id || '',
+          payer_name: it.payer_name || '',
+          pay_id: it.id
+        });
+      });
+      if (items.length < 50) break;
+    }
+  });
+  return rows;
+}
+
 /** Выручка по заявкам из Instagram — по фактическим оплатам в AlfaCRM. */
-function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency) {
+function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelineNames) {
   const customers = pplRows_('RAW_alfa_customers');
-  const core = pplAlfaRevenueCore_(pplRows_('RAW_leads'), customers, pplRows_('RAW_pays'), since, until);
+  let leadRows = pplRows_('RAW_leads');
+  let payRows = pplRows_('RAW_pays');
+  // живая дельта — бонус к утренним листам; если amo или Альфа сейчас
+  // недоступны, страница честно покажет утренний снимок, а не упадёт
+  try { leadRows = pplMergeRows_(leadRows, pplLiveLeadRows_(pipelineNames), 'lead_id'); } catch (e) {}
+  try { payRows = pplMergeRows_(payRows, pplLivePayRows_(), 'pay_id'); } catch (e) {}
+  const core = pplAlfaRevenueCore_(leadRows, customers, payRows, since, until);
 
   const spend = spendByPlatform.instagram;
   const adCur = spendByPlatform.currency;
