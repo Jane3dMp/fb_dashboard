@@ -206,9 +206,15 @@ ALFA_BRANCHES (**1,2,4,5** — филиал 3 не добавлять, зерк�
 2. **App Review в Meta** — за владельцем. Тексты в `docs/meta-app-review.md`.
    Гейт подтверждён вживую: «URL Политики конфиденциальности» в настройках
    приложения Proznanie пуст — без него заявку не подать.
-3. **Переезд с Apps Script на `app.proznanie.club`** — схема в репозитории
-   `finmodel-club` (PHP `api/`, деплой GitHub Actions по FTPS, секретный
-   `config.php` руками на сервере). В `assets/dash.js` меняется один адрес.
+3. **Переезд с Apps Script на `app.proznanie.club`** — ПАКЕТ ГОТОВ
+   (15.08.2026): PHP-бэкенд в `api/` (SQLite, cron-ETL, endpoint
+   `people.php`, вебхук с проверкой подписи Meta), воркфлоу
+   `.github/workflows/deploy-hosting.yml` (php-lint + паритетные тесты +
+   FTPS, включается переменной DEPLOY_HOSTING=on и секретами FTP_*),
+   постраничный переключатель `HOSTED_VIEWS` в `assets/dash.js`.
+   Пошаговый чек-лист владельца — `docs/MIGRATION.md`. Ядро оттестировано
+   на паритет с JS (18 сценариев, `php api/tests/core.test.php`) и
+   прогнано на живой Альфе локально.
 
 ## Тесты
 

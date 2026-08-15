@@ -1,0 +1,62 @@
+name: Deploy dashboard to hosting
+
+# Деплой на app.proznanie.club по образцу finmodel-club.
+# ВКЛЮЧАЕТСЯ добавлением секретов FTP_HOST / FTP_USER / FTP_PASSWORD в
+# настройки ЭТОГО репозитория (Settings → Secrets → Actions). Пока их нет,
+# job деплоя тихо пропускается — а проверки PHP работают на каждый push.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  php-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, curl
+      - name: Синтаксис всех PHP-файлов
+        run: |
+          set -e
+          for f in $(find api -name '*.php'); do php -l "$f"; done
+      - name: Паритетные тесты ядра (те же сценарии, что tests/logic.test.js)
+        run: php api/tests/core.test.php
+      - name: JS-тесты логики Apps Script
+        run: node tests/logic.test.js
+
+  ftp-deploy:
+    runs-on: ubuntu-latest
+    needs: php-checks
+    # без секретов деплоить некуда — не падаем, а пропускаем
+    if: ${{ vars.DEPLOY_HOSTING == 'on' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to hosting via FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USER }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          # FTP-аккаунт «заперт» в папке дашборда (например analytics/) —
+          # заливаем в его корень: страницы + assets + api.
+          server-dir: ./
+          # ⚠️ **/config.php и **/data/** в exclude: секретный config.php и
+          #    базу SQLite с кэшем автозаливка НЕ трогает — они живут только
+          #    на сервере.
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.github/**
+            **/apps-script/**
+            **/docs/**
+            **/tests/**
+            **/api/tests/**
+            **/*.md
+            **/config.php
+            **/data/**

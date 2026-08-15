@@ -1,0 +1,19 @@
+# Дашборд-бэкенд — защита секретов и данных.
+Options -Indexes
+
+# Запретить чтение config.php через веб (ключи amo/Alfa/Meta).
+<FilesMatch "config\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Каталог data/ (SQLite и кэш) наружу не отдавать.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^data/ - [F]
+</IfModule>

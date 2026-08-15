@@ -11,6 +11,15 @@
  */
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbwUcboOjB-_cLVnh549OU6BLK43F4rBn6QDN6eVohKfc5YAcNP2T-K_KVRqKm4_iHg4/exec';
 
+/**
+ * Поэтапный переезд на app.proznanie.club: view, вписанный сюда, ходит на
+ * хостинг, остальные — по-прежнему в Apps Script. Чтобы переключить
+ * «Путь клиента», раскомментируйте строку (см. docs/MIGRATION.md, шаг 6):
+ */
+const HOSTED_VIEWS = {
+  // people: 'https://app.proznanie.club/analytics/api/people.php',
+};
+
 const KEY_STORAGE = 'fb_dash_key';
 
 /* ---------- замок ---------- */
@@ -60,7 +69,9 @@ if (dashKey()) {
  * Бросает исключение с текстом ошибки; на неверный пароль показывает замок.
  */
 async function api(query) {
-  const resp = await fetch(GAS_URL + '?' + query + '&key=' + encodeURIComponent(dashKey()));
+  const view = (query.match(/view=(\w+)/) || [])[1];
+  const base = HOSTED_VIEWS[view] || GAS_URL;
+  const resp = await fetch(base + '?' + query + '&key=' + encodeURIComponent(dashKey()));
   if (resp.status === 401 || resp.status === 403) {
     sessionStorage.removeItem(KEY_STORAGE);
     showGate('Неверный пароль');
