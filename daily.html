@@ -96,6 +96,7 @@
       по <input type="date" id="dateTo">
       <button id="btnPeriod">Показать период</button>
     </span>
+    <button id="btnProfiles" title="Разложить те же дни отдельно по каждому Instagram-профилю">По профилям</button>
   </div>
 
   <div id="status">Загрузка…</div>
@@ -119,6 +120,7 @@
         сообщения ÷ клики по ссылке. Валюта — валюта рекламного кабинета.
         Дни без открутки не показываются.</div>
     </div>
+    <div id="profilesBlocks" style="display:none"></div>
   </div>
 </div>
 
@@ -164,6 +166,14 @@ document.getElementById('btnPeriod').addEventListener('click', () => {
   loadData();
 });
 
+let splitProfiles = false;
+let lastD = null;
+document.getElementById('btnProfiles').addEventListener('click', () => {
+  splitProfiles = !splitProfiles;
+  document.getElementById('btnProfiles').classList.toggle('active', splitProfiles);
+  if (lastD) render(lastD);
+});
+
 const fmtInt = n => (n || 0).toLocaleString('ru-RU');
 let CUR = 'USD';
 const money = n => n == null ? '—' : n.toLocaleString('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' ' + (CUR === 'USD' ? '$' : CUR);
@@ -188,7 +198,10 @@ async function loadData() {
   }
 }
 
+const TABLE_HEAD = document.querySelector('table thead').innerHTML;
+
 function render(d) {
+  lastD = d;
   CUR = d.currency || 'USD';
   document.getElementById('updated').textContent =
     d.since + ' — ' + d.until + ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
@@ -209,6 +222,32 @@ function render(d) {
     document.querySelector('.note').textContent =
       '⚠ Кабинеты ведутся в разных валютах — суммы в таблице складывать нельзя.';
   }
+
+  // раздельно по Instagram-профилям — те же дни, по табличке на профиль
+  const holder = document.getElementById('profilesBlocks');
+  holder.innerHTML = '';
+  const profiles = d.by_profile || [];
+  document.getElementById('btnProfiles').style.display = profiles.length ? '' : 'none';
+  if (splitProfiles && profiles.length) {
+    profiles.forEach(p => {
+      const block = document.createElement('div');
+      block.className = 'block';
+      const tot = { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+      p.days.forEach(x => {
+        tot.spend += x.spend; tot.impressions += x.impressions; tot.clicks += x.clicks;
+        tot.link_clicks += x.link_clicks; tot.messages += x.messages;
+      });
+      block.innerHTML = '<h2>' + p.profile + ' · потрачено ' + money(tot.spend) + '</h2>' +
+        '<div class="table-scroll"><table><thead>' + TABLE_HEAD + '</thead><tbody></tbody></table></div>';
+      const tb = block.querySelector('tbody');
+      p.days.forEach(x => tb.appendChild(row(x.date.split('-').reverse().join('.'), x, false)));
+      tb.appendChild(row('Итого', tot, true));
+      holder.appendChild(block);
+    });
+  }
+  holder.style.display = (splitProfiles && profiles.length) ? '' : 'none';
+  document.querySelector('#content > .block').style.display =
+    (splitProfiles && profiles.length) ? 'none' : '';
 }
 
 function row(label, x, isTotal) {

@@ -346,7 +346,11 @@ function pplFetchSpendByPlatform_(since, until) {
  * «id:Название,id:Название». Профиль без имени показываем по id — лучше
  * непонятная строка, чем потерянные деньги.
  */
-function pplFetchSpendByProfile_(spendByAd) {
+/**
+ * Связка «объявление → Instagram-профиль» и имена профилей — общий хелпер
+ * для «Пути клиента» и «Дней таргета». Возвращает { actorByAd, names }.
+ */
+function pplIgProfileMap_(adIds) {
   const names = {};
   (PropertiesService.getScriptProperties().getProperty('IG_PROFILES') || '')
     .split(',').forEach(function (pair) {
@@ -354,10 +358,6 @@ function pplFetchSpendByProfile_(spendByAd) {
       if (i > 0) names[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
     });
 
-  // Спрашиваем креативы только у объявлений, которые реально тратили деньги
-  // за период. Обход всех объявлений кабинета занимал столько времени, что
-  // запрос не укладывался в таймаут и страница падала с «Failed to fetch».
-  const adIds = Object.keys(spendByAd);
   const actorByAd = {};
 
   // Креатив объявления не меняется, поэтому связку держим в кэше надолго
@@ -432,11 +432,20 @@ function pplFetchSpendByProfile_(spendByAd) {
     }
   }
 
+  return { actorByAd: actorByAd, names: names };
+}
+
+function pplFetchSpendByProfile_(spendByAd) {
+  // Спрашиваем креативы только у объявлений, которые реально тратили деньги
+  // за период. Обход всех объявлений кабинета занимал столько времени, что
+  // запрос не укладывался в таймаут и страница падала с «Failed to fetch».
+  const map = pplIgProfileMap_(Object.keys(spendByAd));
+
   const acc = {};
   Object.keys(spendByAd).forEach(function (adId) {
-    const actor = actorByAd[adId] || '';
+    const actor = map.actorByAd[adId] || '';
     const key = actor || '(профиль не определён)';
-    if (!acc[key]) acc[key] = { profile_id: actor, profile: names[actor] || key, spend: 0, clicks: 0, ads: 0 };
+    if (!acc[key]) acc[key] = { profile_id: actor, profile: map.names[actor] || key, spend: 0, clicks: 0, ads: 0 };
     acc[key].spend += spendByAd[adId].spend;
     acc[key].clicks += spendByAd[adId].clicks;
     acc[key].ads++;
@@ -1271,6 +1280,66 @@ function pplBuildDaily(params) {
     });
   });
 
+  // --- те же дни, но раздельно по Instagram-профилям ---
+  // Дневная строка на каждое объявление (level=ad + time_increment=1),
+  // профиль объявления — из креатива (pplIgProfileMap_, кэш надолго).
+  const perAd = [];
+  pplAdAccounts_().forEach(function (acct) {
+    let url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
+      '?level=ad&time_increment=1' +
+      '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions' +
+      '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
+      '&limit=500&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+    // страниц может быть несколько: объявления × дни
+    for (let page = 0; page < 6 && url; page++) {
+      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (resp.getResponseCode() !== 200) break;
+      const body = JSON.parse(resp.getContentText());
+      (body.data || []).forEach(function (r) { perAd.push(r); });
+      url = body.paging && body.paging.next ? body.paging.next : null;
+    }
+  });
+
+  const adIds = [];
+  perAd.forEach(function (r) {
+    if (adIds.indexOf(r.ad_id) === -1) adIds.push(r.ad_id);
+  });
+  const map = pplIgProfileMap_(adIds);
+
+  const byProfile = {};
+  perAd.forEach(function (r) {
+    const actor = map.actorByAd[r.ad_id] || '';
+    const key = actor || '(профиль не определён)';
+    if (!byProfile[key]) {
+      byProfile[key] = { profile_id: actor, profile: map.names[actor] || key, byDate: {} };
+    }
+    const p = byProfile[key];
+    const d = r.date_start;
+    if (!p.byDate[d]) p.byDate[d] = { date: d, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+    const row = p.byDate[d];
+    row.spend += Number(r.spend || 0);
+    row.impressions += Number(r.impressions || 0);
+    row.clicks += Number(r.clicks || 0);
+    row.link_clicks += Number(r.inline_link_clicks || 0);
+    (r.actions || []).forEach(function (a) {
+      if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
+        row.messages += Number(a.value || 0);
+      }
+    });
+  });
+
+  const profiles = Object.keys(byProfile).map(function (k) {
+    const p = byProfile[k];
+    return {
+      profile_id: p.profile_id,
+      profile: p.profile,
+      days: Object.keys(p.byDate).sort().map(function (d) { return p.byDate[d]; })
+    };
+  }).sort(function (a, b) {
+    const s = function (x) { return x.days.reduce(function (t, d) { return t + d.spend; }, 0); };
+    return s(b) - s(a);
+  });
+
   const days = Object.keys(byDate).sort().map(function (k) { return byDate[k]; });
   const out = {
     view: 'daily',
@@ -1279,7 +1348,8 @@ function pplBuildDaily(params) {
     updated: new Date().toISOString(),
     currency: currency,
     mixed_currency: mixed,
-    days: days
+    days: days,
+    by_profile: profiles
   };
   try {
     const json = JSON.stringify(out);
