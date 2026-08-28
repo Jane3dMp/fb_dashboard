@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Дни таргета — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F5F1E8; --card:#FFFFFF; --ink:#1C1B19; --ink2:#6E6A62;
+    --yellow:#FFD93B; --yellow-soft:#FBF0C4; --line:#EBE6DB;
+    --blue:#3B5BDB; --green:#2E7D46; --red:#C0392B; --shadow:0 2px 14px rgba(28,27,25,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .num,td{font-variant-numeric:tabular-nums}
+
+  .topbar{max-width:1160px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
+  .brand b{color:#C9A800}
+  nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
+  nav.dashnav a{color:var(--ink2);font-size:13px;font-weight:500;text-decoration:none;padding:9px 18px;border-radius:100px;transition:.15s}
+  nav.dashnav a:hover{color:var(--ink)}
+  nav.dashnav a.active{background:var(--ink);color:#fff}
+  #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
+
+  .pagehead{max-width:1160px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
+  .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
+
+  .wrap{max-width:1160px;margin:0 auto;padding:18px 24px 60px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .controls button{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 16px;cursor:pointer;color:var(--ink)}
+  .controls button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .controls .custom-period{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:#666;margin-left:8px}
+  .controls .custom-period input{padding:7px 10px;border:1px solid #ddd;border-radius:999px;font:inherit;font-size:13px;background:#fff}
+
+  .block{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:22px 24px;margin-bottom:18px}
+  .block h2{font-family:'Poppins',sans-serif;font-weight:600;font-size:17px;margin-bottom:14px}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;white-space:nowrap}
+  th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);text-align:right;padding:10px 10px;border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right}
+  td:first-child{text-align:left}
+  td.zero{color:#c9c4b8}
+  tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+  .note{background:var(--yellow-soft);border-radius:14px;padding:14px 18px;font-size:13.5px;line-height:1.55;color:var(--ink);margin-top:14px}
+
+  #status{max-width:1160px;margin:0 auto;padding:30px 24px;color:var(--ink2)}
+  #status.error{color:var(--red)}
+
+  #gate{position:fixed;inset:0;background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:50}
+  #gate input{width:180px;padding:12px 18px;border-radius:12px;border:none;font-size:16px;text-align:center}
+  #gate button{background:var(--yellow);border:none;border-radius:100px;padding:10px 26px;font-weight:600;font-size:14px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="gate" style="display:flex">
+  <form onsubmit="return checkPass(event)">
+    <input id="passInput" type="password" autocomplete="off">
+    <div style="text-align:center;margin-top:12px"><button type="submit">Войти</button></div>
+  </form>
+</div>
+
+<div class="topbar">
+  <div class="brand">Аналитика<b>.</b></div>
+  <nav class="dashnav">
+    <a href="index.html">Расход</a>
+    <a href="funnel.html">Воронка</a>
+    <a href="channel.html">Instagram-канал</a>
+    <a href="brands.html">Направления</a>
+    <a href="kanikuly.html">Каникулы</a>
+    <a href="daily.html" class="active">Дни</a>
+    <a href="people.html">Путь клиента</a>
+  </nav>
+  <div id="updated"></div>
+</div>
+
+<div class="pagehead">
+  <h1>Дни таргета</h1>
+  <p>Расход, клики и переписки по каждому дню — считается само из Meta Ads</p>
+</div>
+
+<div class="wrap">
+  <div class="controls">
+    <button data-period="this">Этот месяц</button>
+    <button data-period="prev">Прошлый месяц</button>
+    <button data-period="30">30 дней</button>
+    <span class="custom-period">
+      с <input type="date" id="dateFrom">
+      по <input type="date" id="dateTo">
+      <button id="btnPeriod">Показать период</button>
+    </span>
+  </div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div class="block">
+      <h2 id="tableTitle">По дням</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Дата</th><th>Потрачено</th><th>CPC</th><th>Кликов<br>(по ссылке)</th>
+            <th>CPM</th><th>Показов</th><th>CTR</th>
+            <th>Клики<br>(все)</th><th>Цена за<br>клики (все)</th><th>CTR<br>(все)</th>
+            <th>Сообщений</th><th>Цена за<br>сообщение</th><th>Конверсия<br>в сообщения</th>
+          </tr></thead>
+          <tbody id="daysBody"></tbody>
+        </table>
+      </div>
+      <div class="note">«Сообщений» — начатые переписки из рекламы
+        (messaging_conversation_started в Meta). «Конверсия в сообщения» =
+        сообщения ÷ клики по ссылке. Валюта — валюта рекламного кабинета.
+        Дни без открутки не показываются.</div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/dash.js"></script>
+<script>
+let currentPeriod = { kind: 'this' };
+
+function monthRange(shift) {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth() + shift, 1);
+  const last = shift === 0 ? now : new Date(now.getFullYear(), now.getMonth() + shift + 1, 0);
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return { since: iso(first), until: iso(last) };
+}
+
+function periodRange() {
+  if (currentPeriod.kind === 'this') return monthRange(0);
+  if (currentPeriod.kind === 'prev') return monthRange(-1);
+  if (currentPeriod.kind === '30') {
+    const iso = t => new Date(t).toISOString().slice(0, 10);
+    return { since: iso(Date.now() - 30 * 86400000), until: iso(Date.now()) };
+  }
+  return { since: currentPeriod.since, until: currentPeriod.until };
+}
+
+document.querySelectorAll('.controls button[data-period]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.controls button[data-period]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentPeriod = { kind: btn.dataset.period };
+    loadData();
+  });
+});
+document.querySelector('.controls button[data-period="this"]').classList.add('active');
+
+document.getElementById('btnPeriod').addEventListener('click', () => {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('Заполните обе даты'); return; }
+  if (from > to) { alert('Дата «с» позже даты «по»'); return; }
+  document.querySelectorAll('.controls button[data-period]').forEach(b => b.classList.remove('active'));
+  currentPeriod = { kind: 'custom', since: from, until: to };
+  loadData();
+});
+
+const fmtInt = n => (n || 0).toLocaleString('ru-RU');
+let CUR = 'USD';
+const money = n => n == null ? '—' : n.toLocaleString('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' ' + (CUR === 'USD' ? '$' : CUR);
+const pct = n => n == null ? '—' : (n * 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + '%';
+const ratio = (a, b) => b ? a / b : null;
+
+async function loadData() {
+  const status = document.getElementById('status');
+  const content = document.getElementById('content');
+  status.style.display = 'block'; status.className = ''; status.textContent = 'Загрузка…';
+  content.style.display = 'none';
+  try {
+    const r = periodRange();
+    const d = await api('view=daily&since=' + r.since + '&until=' + r.until);
+    if (!d || !d.days) throw new Error('Бэкенд не отдаёт view=daily — обновите развёртывание Apps Script.');
+    render(d);
+    status.style.display = 'none';
+    content.style.display = 'block';
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Ошибка: ' + err.message;
+  }
+}
+
+function render(d) {
+  CUR = d.currency || 'USD';
+  document.getElementById('updated').textContent =
+    d.since + ' — ' + d.until + ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
+  document.getElementById('tableTitle').textContent =
+    'По дням · ' + d.since + ' — ' + d.until;
+
+  const body = document.getElementById('daysBody');
+  body.innerHTML = '';
+  const t = { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+  d.days.forEach(x => {
+    t.spend += x.spend; t.impressions += x.impressions; t.clicks += x.clicks;
+    t.link_clicks += x.link_clicks; t.messages += x.messages;
+    body.appendChild(row(x.date.split('-').reverse().join('.'), x, false));
+  });
+  body.appendChild(row('Итого', t, true));
+
+  if (d.mixed_currency) {
+    document.querySelector('.note').textContent =
+      '⚠ Кабинеты ведутся в разных валютах — суммы в таблице складывать нельзя.';
+  }
+}
+
+function row(label, x, isTotal) {
+  const tr = document.createElement('tr');
+  if (isTotal) tr.className = 'total';
+  const cells = [
+    label,
+    money(x.spend),
+    money(ratio(x.spend, x.link_clicks)),
+    fmtInt(x.link_clicks),
+    money(ratio(x.spend * 1000, x.impressions)),
+    fmtInt(x.impressions),
+    pct(ratio(x.link_clicks, x.impressions)),
+    fmtInt(x.clicks),
+    money(ratio(x.spend, x.clicks)),
+    pct(ratio(x.clicks, x.impressions)),
+    fmtInt(x.messages),
+    money(ratio(x.spend, x.messages)),
+    pct(ratio(x.messages, x.link_clicks)),
+  ];
+  tr.innerHTML = cells.map((c, i) => {
+    const zero = (c === '—' || c === '0') && i > 0;
+    return '<td class="' + (zero ? 'zero' : '') + '">' + c + '</td>';
+  }).join('');
+  return tr;
+}
+
+loadData();
+</script>
+</body>
+</html>

@@ -1217,6 +1217,77 @@ function pplDumpContactFields() {
     '; контактов просмотрено ' + contactsSeen + '; телефоноподобных значений ' + phoneLikeSeen);
 }
 
+/* ============ 3c. Дневной отчёт по таргету ============ */
+
+/**
+ * Дневная разбивка рекламы (view=daily): расход, показы, клики и начатые
+ * переписки по каждому дню периода — как в ручных таблицах таргетолога,
+ * только заполняется само из Meta Ads Insights.
+ *
+ * «Сообщений» — это action_type messaging_conversation_started_7d:
+ * человек из рекламы начал переписку. Производные метрики (CPC, CPM,
+ * CTR, цена сообщения) страница считает сама из сырых чисел.
+ */
+function pplBuildDaily(params) {
+  params = params || {};
+  const until = params.until || pplIsoDate_(new Date());
+  const since = params.since || until.slice(0, 8) + '01';   // по умолчанию с начала месяца
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'daily_' + since + '_' + until;
+  if (params.nocache !== '1') {
+    const hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+  }
+
+  const byDate = {};
+  let currency = '', mixed = false;
+  pplAdAccounts_().forEach(function (acct) {
+    const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
+      '?level=account&time_increment=1' +
+      '&fields=spend,impressions,clicks,inline_link_clicks,actions,account_currency' +
+      '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
+      '&limit=200&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return;  // кабинет мог отвалиться — не роняем отчёт
+    ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
+      const d = r.date_start;
+      if (!byDate[d]) byDate[d] = { date: d, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+      const row = byDate[d];
+      row.spend += Number(r.spend || 0);
+      row.impressions += Number(r.impressions || 0);
+      row.clicks += Number(r.clicks || 0);
+      row.link_clicks += Number(r.inline_link_clicks || 0);
+      (r.actions || []).forEach(function (a) {
+        if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
+          row.messages += Number(a.value || 0);
+        }
+      });
+      const cur = String(r.account_currency || '');
+      if (cur) {
+        if (!currency) currency = cur;
+        else if (currency !== cur) mixed = true;
+      }
+    });
+  });
+
+  const days = Object.keys(byDate).sort().map(function (k) { return byDate[k]; });
+  const out = {
+    view: 'daily',
+    since: since,
+    until: until,
+    updated: new Date().toISOString(),
+    currency: currency,
+    mixed_currency: mixed,
+    days: days
+  };
+  try {
+    const json = JSON.stringify(out);
+    if (json.length < 100000) cache.put(cacheKey, json, 600);
+  } catch (e) {}
+  return out;
+}
+
 /* ==================== 4. Склейка ==================== */
 
 function pplMatchingMode_() {
