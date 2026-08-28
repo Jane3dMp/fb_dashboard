@@ -18,7 +18,7 @@
   body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
   .num,td{font-variant-numeric:tabular-nums}
 
-  .topbar{max-width:1160px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .topbar{max-width:1400px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
   .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
   .brand b{color:#C9A800}
   nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
@@ -27,11 +27,11 @@
   nav.dashnav a.active{background:var(--ink);color:#fff}
   #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
 
-  .pagehead{max-width:1160px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead{max-width:1400px;margin:0 auto;padding:22px 24px 4px}
   .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
   .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
 
-  .wrap{max-width:1160px;margin:0 auto;padding:18px 24px 60px}
+  .wrap{max-width:1400px;margin:0 auto;padding:18px 24px 60px}
   .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
   .controls button{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 16px;cursor:pointer;color:var(--ink)}
   .controls button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
@@ -41,10 +41,10 @@
   .block{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:22px 24px;margin-bottom:18px}
   .block h2{font-family:'Poppins',sans-serif;font-weight:600;font-size:17px;margin-bottom:14px}
   .table-scroll{overflow-x:auto}
-  table{width:100%;border-collapse:collapse;font-size:13.5px;white-space:nowrap}
-  th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);text-align:right;padding:10px 10px;border-bottom:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+  th{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);text-align:right;padding:8px 7px;border-bottom:1px solid var(--line)}
   th:first-child{text-align:left}
-  td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right}
+  td{padding:8px 7px;border-bottom:1px solid var(--line);text-align:right}
   td:first-child{text-align:left}
   td.zero{color:#c9c4b8}
   tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
@@ -106,10 +106,10 @@
       <div class="table-scroll">
         <table>
           <thead><tr>
-            <th>Дата</th><th>Потрачено</th><th>CPC</th><th>Кликов<br>(по ссылке)</th>
+            <th>Дата</th><th>Потрачено</th><th>CPC</th><th>Клики<br>ссылка</th>
             <th>CPM</th><th>Показов</th><th>CTR</th>
-            <th>Клики<br>(все)</th><th>Цена за<br>клики (все)</th><th>CTR<br>(все)</th>
-            <th>Сообщений</th><th>Цена за<br>сообщение</th><th>Конверсия<br>в сообщения</th>
+            <th>Клики<br>(все)</th><th>Цена<br>клика (все)</th><th>CTR<br>(все)</th>
+            <th>Сообщений</th><th>Цена<br>сообщ.</th><th>Конв. в<br>сообщ.</th>
           </tr></thead>
           <tbody id="daysBody"></tbody>
         </table>
