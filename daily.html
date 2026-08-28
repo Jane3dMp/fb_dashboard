@@ -56,6 +56,23 @@
   #gate{position:fixed;inset:0;background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:50}
   #gate input{width:180px;padding:12px 18px;border-radius:12px;border:none;font-size:16px;text-align:center}
   #gate button{background:var(--yellow);border:none;border-radius:100px;padding:10px 26px;font-weight:600;font-size:14px;cursor:pointer}
+
+  /* Печать / сохранение в PDF: только то, что на экране, без кнопок */
+  @media print{
+    @page{size:A4 landscape;margin:12mm}
+    body{background:#fff}
+    #gate,.controls,nav.dashnav,.brand{display:none !important}
+    .topbar{padding:0}
+    #updated{margin-left:0;font-size:11px}
+    .pagehead{padding:0 0 6px}
+    .pagehead h1{font-size:20px}
+    .wrap{max-width:none;padding:0}
+    .block{box-shadow:none;border:1px solid #ddd;border-radius:8px;padding:12px;page-break-inside:auto}
+    table{font-size:10px}
+    th,td{padding:4px 5px}
+    tr{page-break-inside:avoid}
+    .note{border:1px solid #eee}
+  }
 </style>
 </head>
 <body>
@@ -97,6 +114,7 @@
       <button id="btnPeriod">Показать период</button>
     </span>
     <button id="btnProfiles" title="Разложить те же дни отдельно по каждому Instagram-профилю">По профилям</button>
+    <button id="btnPdf" title="Сохранить то, что сейчас на экране, в PDF (в диалоге печати выберите «Сохранить как PDF»)">⤓ PDF</button>
   </div>
 
   <div id="status">Загрузка…</div>
@@ -168,6 +186,8 @@ document.getElementById('btnPeriod').addEventListener('click', () => {
 
 let splitProfiles = false;
 let lastD = null;
+document.getElementById('btnPdf').addEventListener('click', () => window.print());
+
 document.getElementById('btnProfiles').addEventListener('click', () => {
   splitProfiles = !splitProfiles;
   document.getElementById('btnProfiles').classList.toggle('active', splitProfiles);

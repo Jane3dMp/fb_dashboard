@@ -83,6 +83,27 @@
   #gate input{font-family:'Inter',sans-serif;font-size:15px;padding:12px 16px;border:none;border-radius:12px;outline:none;text-align:center;width:230px}
   #gate button{display:block;margin:12px auto 0;font-size:14px;font-weight:600;background:var(--yellow);color:var(--ink);border:none;border-radius:100px;padding:11px 28px;cursor:pointer}
   @media(max-width:600px){.wrap,.pagehead,.topbar{padding-left:14px;padding-right:14px}.kpi .value{font-size:24px}.pagehead h1{font-size:24px}}
+
+  /* Печать / сохранение в PDF: только то, что на экране, без кнопок */
+  @media print{
+    @page{size:A4;margin:12mm}
+    body{background:#fff}
+    #gate,.controls,nav.dashnav,.brand{display:none !important}
+    .topbar{padding:0}
+    #updated{margin-left:0;font-size:11px}
+    .pagehead{padding:0 0 6px}
+    .pagehead h1{font-size:20px}
+    .wrap{max-width:none;padding:0}
+    .block,.kpi{box-shadow:none;border:1px solid #ddd}
+    .block{page-break-inside:auto;padding:12px;border-radius:8px}
+    .kpis{grid-template-columns:repeat(6,1fr);gap:6px}
+    .kpi{padding:8px}.kpi .value{font-size:18px}
+    table{font-size:10px}
+    th,td{padding:4px 5px}
+    tr{page-break-inside:avoid}
+    #peopleBlock{display:none !important}
+    details.paid summary{list-style:none}
+  }
 </style>
 </head>
 <body>
@@ -124,6 +145,7 @@
       <button id="btnPeriod">Показать период</button>
     </span>
     <button id="btnFresh" title="Пересчитать прямо сейчас, минуя кэш: свежие заявки и платежи подтягиваются из CRM">⟳ Обновить сейчас</button>
+    <button id="btnPdf" title="Сохранить то, что сейчас на экране, в PDF (в диалоге печати выберите «Сохранить как PDF»)">⤓ PDF</button>
     <button class="right" id="btnNames">Показать имена</button>
   </div>
 
@@ -265,6 +287,18 @@ document.getElementById('btnPeriod').addEventListener('click', () => {
 });
 
 document.getElementById('btnFresh').addEventListener('click', () => loadData(true));
+
+// печать: раскрывашки должны попасть в PDF раскрытыми, а после — вернуться
+let openedForPrint = [];
+window.addEventListener('beforeprint', () => {
+  openedForPrint = [...document.querySelectorAll('details:not([open])')];
+  openedForPrint.forEach(d => d.open = true);
+});
+window.addEventListener('afterprint', () => {
+  openedForPrint.forEach(d => d.open = false);
+  openedForPrint = [];
+});
+document.getElementById('btnPdf').addEventListener('click', () => window.print());
 
 document.getElementById('btnNames').addEventListener('click', () => {
   showNames = !showNames;
