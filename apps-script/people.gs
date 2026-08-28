@@ -1251,6 +1251,9 @@ function pplBuildDaily(params) {
 
   const byDate = {};
   let currency = '', mixed = false;
+  // если какой-то кабинет не ответил, отчёт отдаём, но в кэш не кладём —
+  // иначе разовый сбой Meta на 10 минут прикидывается «данных нет»
+  let partial = false;
   pplAdAccounts_().forEach(function (acct) {
     const url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
       '?level=account&time_increment=1' +
@@ -1258,7 +1261,7 @@ function pplBuildDaily(params) {
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=200&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (resp.getResponseCode() !== 200) return;  // кабинет мог отвалиться — не роняем отчёт
+    if (resp.getResponseCode() !== 200) { partial = true; return; }
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       const d = r.date_start;
       if (!byDate[d]) byDate[d] = { date: d, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
@@ -1293,7 +1296,7 @@ function pplBuildDaily(params) {
     // страниц может быть несколько: объявления × дни
     for (let page = 0; page < 6 && url; page++) {
       const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (resp.getResponseCode() !== 200) break;
+      if (resp.getResponseCode() !== 200) { partial = true; break; }
       const body = JSON.parse(resp.getContentText());
       (body.data || []).forEach(function (r) { perAd.push(r); });
       url = body.paging && body.paging.next ? body.paging.next : null;
@@ -1349,11 +1352,12 @@ function pplBuildDaily(params) {
     currency: currency,
     mixed_currency: mixed,
     days: days,
-    by_profile: profiles
+    by_profile: profiles,
+    partial: partial
   };
   try {
     const json = JSON.stringify(out);
-    if (json.length < 100000) cache.put(cacheKey, json, 600);
+    if (!partial && json.length < 100000) cache.put(cacheKey, json, 600);
   } catch (e) {}
   return out;
 }

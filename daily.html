@@ -249,6 +249,11 @@ function render(d) {
   const profiles = d.by_profile || [];
   document.getElementById('btnProfiles').style.display = profiles.length ? '' : 'none';
   if (splitProfiles && profiles.length) {
+    const head = document.createElement('div');
+    head.className = 'block';
+    head.innerHTML = '<h2>По профилям · ' + d.since + ' — ' + d.until + '</h2>' +
+      (d.partial ? '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите на период ещё раз, чтобы перезапросить.</div>' : '');
+    holder.appendChild(head);
     profiles.forEach(p => {
       const block = document.createElement('div');
       block.className = 'block';
