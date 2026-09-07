@@ -128,6 +128,74 @@ function meta_get(string $pathAndQuery): array {
     return $r['code'] === 200 ? $r['data'] : [];
 }
 
+/**
+ * Все строки постраничного ответа Graph API. В paging.next токен уже
+ * вшит, поэтому следующие страницы тянем http_json напрямую.
+ */
+function meta_get_all(string $pathAndQuery, int $maxPages = 5): array {
+    $rows = [];
+    $data = meta_get($pathAndQuery);
+    for ($page = 0; $page < $maxPages; $page++) {
+        foreach ($data['data'] ?? [] as $r) $rows[] = $r;
+        $next = $data['paging']['next'] ?? null;
+        if (!$next) break;
+        $r2 = http_json('GET', $next);
+        $data = $r2['code'] === 200 ? $r2['data'] : [];
+    }
+    return $rows;
+}
+
+/**
+ * Идентификаторы объявлений, которые Meta прямо сейчас доставляет.
+ * effective_status — «настоящий» статус с учётом родителей: живое
+ * объявление в выключенной группе приходит как ADSET_PAUSED и в выборку
+ * не попадает. Спрашиваем только id — ответ маленький.
+ */
+function meta_active_ad_ids(): array {
+    $out = [];
+    foreach (array_keys(cfg()['meta']['accounts']) as $accId) {
+        foreach (meta_get_all('/act_' . $accId . '/ads?effective_status='
+            . urlencode('["ACTIVE"]') . '&fields=id&limit=500', 4) as $r) {
+            $out[(string)($r['id'] ?? '')] = true;
+        }
+    }
+    unset($out['']);
+    return $out;
+}
+
+/** Пустая строка-накопитель метрик Insights. */
+function metrics_zero(): array {
+    return ['spend' => 0.0, 'impressions' => 0, 'clicks' => 0, 'link_clicks' => 0, 'messages' => 0];
+}
+
+/** Приплюсовывает к накопителю одну строку Insights. */
+function metrics_add(array $row, array $r): array {
+    $row['spend'] += (float)($r['spend'] ?? 0);
+    $row['impressions'] += (int)($r['impressions'] ?? 0);
+    $row['clicks'] += (int)($r['clicks'] ?? 0);
+    $row['link_clicks'] += (int)($r['inline_link_clicks'] ?? 0);
+    foreach ($r['actions'] ?? [] as $a) {
+        if (strpos((string)($a['action_type'] ?? ''), 'messaging_conversation_started') !== false) {
+            $row['messages'] += (int)($a['value'] ?? 0);
+        }
+    }
+    return $row;
+}
+
+/** Сумма метрик по списку строк. */
+function metrics_sum(array $rows): array {
+    $t = metrics_zero();
+    foreach ($rows as $r) {
+        foreach ($t as $k => $_) $t[$k] += $r[$k] ?? 0;
+    }
+    return $t;
+}
+
+/** Бюджет Meta приходит в копейках/центах строкой. */
+function meta_budget($v): float {
+    return (float)($v ?? 0) / 100;
+}
+
 // ---------- Файловый кэш (замена CacheService) ----------
 function cache_dir(): string {
     $dir = __DIR__ . '/data/cache';

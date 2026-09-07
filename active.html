@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Сейчас активно — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F5F1E8; --card:#FFFFFF; --ink:#1C1B19; --ink2:#6E6A62;
+    --yellow:#FFD93B; --yellow-soft:#FBF0C4; --line:#EBE6DB;
+    --blue:#3B5BDB; --green:#2E7D46; --red:#C0392B; --shadow:0 2px 14px rgba(28,27,25,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .num,td{font-variant-numeric:tabular-nums}
+
+  .topbar{max-width:1400px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
+  .brand b{color:#C9A800}
+  nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
+  nav.dashnav a{color:var(--ink2);font-size:13px;font-weight:500;text-decoration:none;padding:9px 18px;border-radius:100px;transition:.15s}
+  nav.dashnav a:hover{color:var(--ink)}
+  nav.dashnav a.active{background:var(--ink);color:#fff}
+  #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
+
+  .pagehead{max-width:1400px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
+  .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
+
+  .wrap{max-width:1400px;margin:0 auto;padding:18px 24px 60px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .controls button{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 16px;cursor:pointer;color:var(--ink)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
+  .card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:16px 18px}
+  .card .k{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);font-weight:600}
+  .card .v{font-family:'Poppins',sans-serif;font-size:26px;font-weight:600;margin-top:4px;line-height:1.1}
+  .card .s{font-size:12px;color:var(--ink2);margin-top:3px}
+
+  .block{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:22px 24px;margin-bottom:18px}
+  .blockhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .blockhead h2{font-family:'Poppins',sans-serif;font-weight:600;font-size:17px}
+  .blockhead .sub{font-size:12.5px;color:var(--ink2)}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+  th{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);text-align:right;padding:8px 7px;border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:8px 7px;border-bottom:1px solid var(--line);text-align:right}
+  td:first-child{text-align:left}
+  td.zero{color:#c9c4b8}
+  td.name{white-space:normal;min-width:190px;max-width:340px;line-height:1.35}
+  td.name small{display:block;color:var(--ink2);font-size:11px;margin-top:1px}
+  tr.grp td{background:var(--yellow-soft);font-weight:600}
+  tr.grp td.name{padding-top:10px}
+  tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+  .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
+  .note{background:var(--yellow-soft);border-radius:14px;padding:14px 18px;font-size:13.5px;line-height:1.55;color:var(--ink);margin-top:14px}
+
+  #status{max-width:1160px;margin:0 auto;padding:30px 24px;color:var(--ink2)}
+  #status.error{color:var(--red)}
+
+  #gate{position:fixed;inset:0;background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:50}
+  #gate input{width:180px;padding:12px 18px;border-radius:12px;border:none;font-size:16px;text-align:center}
+  #gate button{background:var(--yellow);border:none;border-radius:100px;padding:10px 26px;font-weight:600;font-size:14px;cursor:pointer}
+
+  /* Печать / сохранение в PDF: только то, что на экране, без кнопок */
+  @media print{
+    @page{size:A4 landscape;margin:12mm}
+    body{background:#fff}
+    #gate,.controls,nav.dashnav,.brand{display:none !important}
+    .topbar{padding:0}
+    #updated{margin-left:0;font-size:11px}
+    .pagehead{padding:0 0 6px}
+    .pagehead h1{font-size:20px}
+    .wrap{max-width:none;padding:0}
+    .card,.block{box-shadow:none;border:1px solid #ddd;border-radius:8px;padding:12px}
+    table{font-size:10px}
+    th,td{padding:4px 5px}
+    tr{page-break-inside:avoid}
+    .note{border:1px solid #eee}
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" style="display:flex">
+  <form onsubmit="return checkPass(event)">
+    <input id="passInput" type="password" autocomplete="off">
+    <div style="text-align:center;margin-top:12px"><button type="submit">Войти</button></div>
+  </form>
+</div>
+
+<div class="topbar">
+  <div class="brand">Аналитика<b>.</b></div>
+  <nav class="dashnav">
+    <a href="index.html">Расход</a>
+    <a href="funnel.html">Воронка</a>
+    <a href="channel.html">Instagram-канал</a>
+    <a href="brands.html">Направления</a>
+    <a href="kanikuly.html">Каникулы</a>
+    <a href="daily.html">Дни</a>
+    <a href="active.html" class="active">Сейчас активно</a>
+    <a href="people.html">Путь клиента</a>
+  </nav>
+  <div id="updated"></div>
+</div>
+
+<div class="pagehead">
+  <h1>Сейчас активно</h1>
+  <p>Что Meta крутит прямо сейчас: кампании, группы и объявления с бюджетом и расходом</p>
+</div>
+
+<div class="wrap">
+  <div class="controls">
+    <button id="btnReload" title="Перезапросить у Meta, минуя кэш">↻ Обновить</button>
+    <button id="btnPdf" title="Сохранить то, что сейчас на экране, в PDF (в диалоге печати выберите «Сохранить как PDF»)">⤓ PDF</button>
+  </div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div class="cards" id="cards"></div>
+    <div id="blocks"></div>
+    <div class="note">Активным считается то, что Meta прямо сейчас доставляет:
+      выключенная кампания или группа забирает с собой все свои объявления,
+      даже если сами они включены. «Сегодня» — с начала суток по часовому поясу
+      рекламного кабинета, поэтому утром цифры маленькие и это нормально.
+      Дневной бюджет при CBO задан на кампании, тогда у групп он не показывается.</div>
+  </div>
+</div>
+
+<script src="assets/dash.js"></script>
+<script>
+const fmtInt = n => (n || 0).toLocaleString('ru-RU');
+let CUR = 'USD';
+const money = n => n == null ? '—' : n.toLocaleString('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' ' + (CUR === 'USD' ? '$' : CUR);
+const ratio = (a, b) => b ? a / b : null;
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const dmy = t => t ? String(t).slice(0, 10).split('-').reverse().join('.') : '';
+/** «1 группа / 2 группы / 5 групп» — иначе шапка читается как машинный лог. */
+const plural = (n, forms) => {
+  const a = Math.abs(n) % 100, b = a % 10;
+  const f = (a > 10 && a < 20) || b === 0 || b > 4 ? forms[2] : (b === 1 ? forms[0] : forms[1]);
+  return fmtInt(n) + ' ' + f;
+};
+const ADS = ['объявление', 'объявления', 'объявлений'];
+
+document.getElementById('btnPdf').addEventListener('click', () => window.print());
+document.getElementById('btnReload').addEventListener('click', () => loadData(true));
+
+async function loadData(fresh) {
+  const status = document.getElementById('status');
+  const content = document.getElementById('content');
+  status.style.display = 'block'; status.className = ''; status.textContent = 'Загрузка…';
+  content.style.display = 'none';
+  try {
+    const d = await api('view=daily&part=active' + (fresh ? '&nocache=1' : ''));
+    // старое развёртывание про part=active не знает и молча отдаёт дни —
+    // лучше честно сказать это, чем показать пустую страницу
+    if (!d || d.view !== 'active') {
+      throw new Error('Бэкенд не отдаёт «Сейчас активно» — обновите развёртывание Apps Script.');
+    }
+    render(d);
+    status.style.display = 'none';
+    content.style.display = 'block';
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Ошибка: ' + err.message;
+  }
+}
+
+function render(d) {
+  CUR = d.currency || 'USD';
+  document.getElementById('updated').textContent =
+    'обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
+
+  const t = d.totals;
+  document.getElementById('cards').innerHTML = [
+    card('Крутится сейчас', fmtInt(t.ads) + ' ' + (t.ads === 1 ? 'объявление' : 'объяв.'),
+      plural(t.campaigns, ['кампания', 'кампании', 'кампаний']) + ' · ' +
+      plural(t.adsets, ['группа', 'группы', 'групп'])),
+    card('Бюджет в день', money(t.daily_budget), 'сумма дневных бюджетов'),
+    card('Потрачено сегодня', money(t.today.spend),
+      fmtInt(t.today.messages) + ' сообщений · ' + fmtInt(t.today.link_clicks) + ' кликов'),
+    card('За 7 дней', money(t.week.spend),
+      fmtInt(t.week.messages) + ' сообщений · ' + fmtInt(t.week.link_clicks) + ' кликов'),
+    card('Цена сообщения', money(ratio(t.week.spend, t.week.messages)), 'за последние 7 дней')
+  ].join('');
+
+  const blocks = document.getElementById('blocks');
+  blocks.innerHTML = '';
+
+  if (d.partial) {
+    const warn = document.createElement('div');
+    warn.className = 'block';
+    warn.innerHTML = '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите «Обновить», чтобы перезапросить.</div>';
+    blocks.appendChild(warn);
+  }
+  if (d.mixed_currency) {
+    const warn = document.createElement('div');
+    warn.className = 'block';
+    warn.innerHTML = '<div class="note">⚠ Кабинеты ведутся в разных валютах — суммы складывать нельзя.</div>';
+    blocks.appendChild(warn);
+  }
+  if (!d.campaigns.length) {
+    const empty = document.createElement('div');
+    empty.className = 'block';
+    empty.innerHTML = '<div class="blockhead"><h2>Сейчас ничего не крутится</h2></div>' +
+      '<div class="sub" style="font-size:13.5px;color:var(--ink2)">Ни одного объявления в статусе «активно» ни в одном кабинете.</div>';
+    blocks.appendChild(empty);
+    return;
+  }
+
+  d.campaigns.forEach(c => {
+    const block = document.createElement('div');
+    block.className = 'block';
+    const bits = [c.account, objective(c.objective)].filter(Boolean).map(esc);
+    if (c.daily_budget) {
+      bits.push(money(c.daily_budget) + ' в день' + (c.budget_on_campaign ? ' (на кампанию)' : ''));
+    } else if (c.lifetime_budget) {
+      bits.push(money(c.lifetime_budget) + ' на весь срок');
+    }
+    block.innerHTML =
+      '<div class="blockhead"><h2><span class="live"></span>' + esc(c.campaign_name) + '</h2>' +
+      '<span class="sub">' + bits.join(' · ') + '</span>' +
+      '<span class="sub">' + plural(c.ads_count, ADS) + '</span></div>' +
+      '<div class="table-scroll"><table><thead><tr>' +
+        '<th>Объявление</th><th>Сегодня</th><th>Показов<br>сегодня</th>' +
+        '<th>Кликов<br>сегодня</th><th>Сообщ.<br>сегодня</th>' +
+        '<th>7 дней</th><th>Кликов<br>7 дней</th><th>Сообщ.<br>7 дней</th>' +
+        '<th>Цена сообщ.<br>7 дней</th>' +
+      '</tr></thead><tbody></tbody></table></div>';
+    const tb = block.querySelector('tbody');
+
+    c.adsets.forEach(s => {
+      const period = [s.start_time ? 'с ' + dmy(s.start_time) : '',
+                      s.end_time ? 'до ' + dmy(s.end_time) : ''].filter(Boolean).join(' ');
+      const sub = [s.daily_budget ? money(s.daily_budget) + ' в день' : '', period]
+        .filter(Boolean).map(esc).join(' · ');
+      tb.appendChild(row(
+        esc(s.adset_name) + (sub ? '<small>' + sub + '</small>' : ''), s, 'grp'));
+      s.ads.forEach(a => {
+        const label = esc(a.ad_name) +
+          (a.profile ? '<small>' + esc(a.profile) + '</small>' : '');
+        tb.appendChild(row(label, a, ''));
+      });
+    });
+    tb.appendChild(row('Итого по кампании', c, 'total'));
+    blocks.appendChild(block);
+  });
+}
+
+function card(k, v, s) {
+  return '<div class="card"><div class="k">' + esc(k) + '</div>' +
+    '<div class="v">' + v + '</div><div class="s">' + esc(s) + '</div></div>';
+}
+
+/** Строка таблицы: первая ячейка — вёрстка, дальше цифры за сегодня и за неделю. */
+function row(label, x, cls) {
+  const tr = document.createElement('tr');
+  if (cls) tr.className = cls;
+  const cells = [
+    money(x.today.spend),
+    fmtInt(x.today.impressions),
+    fmtInt(x.today.link_clicks),
+    fmtInt(x.today.messages),
+    money(x.week.spend),
+    fmtInt(x.week.link_clicks),
+    fmtInt(x.week.messages),
+    money(ratio(x.week.spend, x.week.messages))
+  ];
+  tr.innerHTML = '<td class="name">' + label + '</td>' +
+    cells.map(c => '<td class="' + (c === '—' || c === '0' ? 'zero' : '') + '">' + c + '</td>').join('');
+  return tr;
+}
+
+/** Цель кампании человеческими словами; незнакомую показываем как есть. */
+function objective(code) {
+  const names = {
+    OUTCOME_ENGAGEMENT: 'вовлечение',
+    OUTCOME_LEADS: 'лиды',
+    OUTCOME_TRAFFIC: 'трафик',
+    OUTCOME_AWARENESS: 'охват',
+    OUTCOME_SALES: 'продажи',
+    OUTCOME_APP_PROMOTION: 'приложение',
+    MESSAGES: 'переписки',
+    LINK_CLICKS: 'трафик',
+    POST_ENGAGEMENT: 'вовлечение',
+    LEAD_GENERATION: 'лиды',
+    REACH: 'охват',
+    CONVERSIONS: 'конверсии'
+  };
+  return code ? (names[code] || code.toLowerCase().replace(/^outcome_/, '')) : '';
+}
+
+loadData();
+</script>
+</body>
+</html>

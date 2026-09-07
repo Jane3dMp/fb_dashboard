@@ -801,5 +801,74 @@ test('даты-объекты из листа сравниваются с дат
   assert.strictEqual(r.revenue, 250);
 });
 
+/* ---------- метрики Meta Ads ---------- */
+// Эти хелперы обслуживают и дни, и профили, и разбивку по объявлениям,
+// и «Сейчас активно» — ошибка в них разъедется сразу по четырём отчётам.
+
+const addMetrics_ = sandbox.pplAddMetrics_;
+const sumMetrics_ = sandbox.pplSumMetrics_;
+const zeroMetrics_ = sandbox.pplZeroMetrics_;
+const budget_ = sandbox.pplBudget_;
+
+console.log('\nМетрики Meta Ads');
+
+test('строка Insights складывается в накопитель', () => {
+  const row = addMetrics_(zeroMetrics_(), {
+    spend: '12.34', impressions: '1000', clicks: '40', inline_link_clicks: '25',
+    actions: [{ action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '3' }]
+  });
+  assert.strictEqual(row.spend, 12.34);
+  assert.strictEqual(row.impressions, 1000);
+  assert.strictEqual(row.clicks, 40);
+  assert.strictEqual(row.link_clicks, 25);
+  assert.strictEqual(row.messages, 3);
+});
+
+test('в сообщения попадают только начатые переписки', () => {
+  const row = addMetrics_(zeroMetrics_(), {
+    spend: '1', actions: [
+      { action_type: 'link_click', value: '99' },
+      { action_type: 'post_engagement', value: '55' },
+      { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '2' }
+    ]
+  });
+  assert.strictEqual(row.messages, 2);
+});
+
+test('пустая строка Insights ничего не ломает', () => {
+  assert.deepStrictEqual(addMetrics_(zeroMetrics_(), {}), zeroMetrics_());
+});
+
+test('накопитель суммирует несколько дней', () => {
+  const row = zeroMetrics_();
+  addMetrics_(row, { spend: '1.5', impressions: '10', inline_link_clicks: '2' });
+  addMetrics_(row, { spend: '2.5', impressions: '20', inline_link_clicks: '3' });
+  assert.strictEqual(row.spend, 4);
+  assert.strictEqual(row.impressions, 30);
+  assert.strictEqual(row.link_clicks, 5);
+});
+
+test('итог по списку строк', () => {
+  const t = sumMetrics_([
+    { spend: 1, impressions: 10, clicks: 2, link_clicks: 1, messages: 1 },
+    { spend: 2, impressions: 20, clicks: 3, link_clicks: 2, messages: 0 }
+  ]);
+  // ожидание строим тем же хелпером: объект из vm-песочницы лежит на чужом
+  // Object.prototype, и deepStrictEqual с литералом падает на прототипе
+  const exp = zeroMetrics_();
+  exp.spend = 3; exp.impressions = 30; exp.clicks = 5; exp.link_clicks = 3; exp.messages = 1;
+  assert.deepStrictEqual(t, exp);
+});
+
+test('итог по пустому списку — нули, а не NaN', () => {
+  assert.deepStrictEqual(sumMetrics_([]), zeroMetrics_());
+});
+
+test('бюджет Meta приходит в центах строкой', () => {
+  assert.strictEqual(budget_('800'), 8);
+  assert.strictEqual(budget_(null), 0);
+  assert.strictEqual(budget_(undefined), 0);
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);

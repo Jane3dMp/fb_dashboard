@@ -9,6 +9,9 @@ declare(strict_types=1);
 
 require __DIR__ . '/lib.php';
 
+// «Сейчас активно» — тот же вид, другой отчёт (как part=active в people.gs)
+if (($_GET['part'] ?? '') === 'active') { require __DIR__ . '/active.php'; exit; }
+
 cors();
 require_dash_key();
 
@@ -57,7 +60,8 @@ ksort($byDate);
 $perAd = [];
 foreach (array_keys(cfg()['meta']['accounts']) as $accId) {
     $data = meta_get('/act_' . $accId . '/insights?level=ad&time_increment=1'
-        . '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions'
+        . '&fields=ad_id,ad_name,adset_name,campaign_id,campaign_name,'
+        . 'spend,impressions,clicks,inline_link_clicks,actions'
         . '&time_range=' . urlencode(json_encode(['since' => $since, 'until' => $until]))
         . '&limit=500');
     for ($page = 0; $page < 6; $page++) {
@@ -135,6 +139,58 @@ usort($profiles, function ($a, $b) {
     return $s($b) <=> $s($a);
 });
 
+/* --- тот же расход по конкретным объявлениям внутри кампаний --- */
+// Считается из уже скачанного $perAd: отдельного запроса не нужно,
+// дневные строки просто складываются по ad_id за весь период.
+$activeIds = meta_active_ad_ids();
+$byAd = [];
+foreach ($perAd as $r) {
+    $id = (string)($r['ad_id'] ?? '');
+    if ($id === '') continue;
+    $d = (string)($r['date_start'] ?? '');
+    if (!isset($byAd[$id])) {
+        $actor = $actorByAd[$id] ?? '';
+        $label = $igNames[$actor] ?? (($known[$actor] ?? '') !== '' ? $known[$actor] : $actor);
+        $byAd[$id] = metrics_zero() + [
+            'ad_id' => $id,
+            'ad_name' => (string)($r['ad_name'] ?? $id),
+            'adset_name' => (string)($r['adset_name'] ?? ''),
+            'campaign_id' => (string)($r['campaign_id'] ?? ''),
+            'campaign_name' => (string)($r['campaign_name'] ?? '(кампания без названия)'),
+            'profile_id' => $actor,
+            'profile' => $actor !== '' ? $label : '',
+            'active' => isset($activeIds[$id]),
+            'days' => 0,
+            'first_date' => $d,
+            'last_date' => $d,
+        ];
+    }
+    // metrics_add возвращает строку целиком: остальные поля сохраняются
+    $byAd[$id] = metrics_add($byAd[$id], $r);
+    // «дней в работе» — только дни с открученными деньгами: строка с нулём
+    // приходит и на день, когда объявление стояло на паузе
+    if ((float)($r['spend'] ?? 0) > 0) $byAd[$id]['days']++;
+    if ($d !== '' && $d < $byAd[$id]['first_date']) $byAd[$id]['first_date'] = $d;
+    if ($d > $byAd[$id]['last_date']) $byAd[$id]['last_date'] = $d;
+}
+
+$byCampaign = [];
+foreach ($byAd as $a) {
+    $key = $a['campaign_id'] !== '' ? $a['campaign_id'] : $a['campaign_name'];
+    if (!isset($byCampaign[$key])) {
+        $byCampaign[$key] = ['campaign_id' => $a['campaign_id'], 'campaign_name' => $a['campaign_name'], 'ads' => []];
+    }
+    $byCampaign[$key]['ads'][] = $a;
+}
+$campaigns = [];
+foreach ($byCampaign as $c) {
+    usort($c['ads'], fn($x, $y) => $y['spend'] <=> $x['spend']);
+    $c['totals'] = metrics_sum($c['ads']);
+    $c['active_ads'] = count(array_filter($c['ads'], fn($a) => $a['active']));
+    $campaigns[] = $c;
+}
+usort($campaigns, fn($a, $b) => $b['totals']['spend'] <=> $a['totals']['spend']);
+
 $out = [
     'view' => 'daily',
     'since' => $since,
@@ -144,6 +200,7 @@ $out = [
     'mixed_currency' => $mixed,
     'days' => array_values($byDate),
     'by_profile' => $profiles,
+    'by_campaign' => $campaigns,
 ];
 cache_put($cacheKey, $out);
 json_out($out);

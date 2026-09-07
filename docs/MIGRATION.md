@@ -12,6 +12,8 @@
 |---|---|---|
 | `api/etl.php` | cron-выгрузки amo/Альфы в SQLite | runAmoEtl, pplEtlAlfaCustomers, pplRebuildPays, триггеры |
 | `api/people.php` | endpoint «Путь клиента» | doGet → buildPeople (view=people) |
+| `api/daily.php` | endpoint «Дни таргета» | pplBuildDaily (view=daily) |
+| `api/active.php` | endpoint «Сейчас активно» | pplBuildActive (view=daily&part=active) |
 | `api/webhook.php` | приёмник вебхука Instagram, с проверкой подписи Meta | проект «IG webhook» целиком |
 | `api/core.php` | расчётное ядро (мост, деньги, разрезы) | pplAlfaRevenueCore_, pplChannelSummary_ |
 | `api/lib.php`, `api/db.php` | конфиг, HTTP-клиенты, SQLite | Свойства скрипта, CacheService, Sheets |

@@ -1226,6 +1226,84 @@ function pplDumpContactFields() {
     '; контактов просмотрено ' + contactsSeen + '; телефоноподобных значений ' + phoneLikeSeen);
 }
 
+/* ============ 3b. Общие хелперы Meta Ads ============ */
+
+/**
+ * GET к Graph API. Принимает и короткий путь («act_1/insights?...»), и
+ * готовый адрес из paging.next — в нём токен уже вшит, второй раз его
+ * добавлять нельзя. Возвращает разобранное тело или null, если Meta
+ * ответила не 200: вызывающий сам решает, это «пусто» или «сбой».
+ */
+function pplGraph_(pathOrUrl) {
+  const url = pathOrUrl.indexOf('http') === 0
+    ? pathOrUrl
+    : 'https://graph.facebook.com/' + FB_API_VERSION + '/' + pathOrUrl +
+      (pathOrUrl.indexOf('?') === -1 ? '?' : '&') +
+      'access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
+  const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) return null;
+  return JSON.parse(resp.getContentText());
+}
+
+/** Пустая строка-накопитель метрик Insights. */
+function pplZeroMetrics_() {
+  return { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+}
+
+/**
+ * Приплюсовывает к накопителю одну строку Insights. Вынесено из четырёх
+ * одинаковых мест: раньше «начатую переписку» опознавали в каждом своей
+ * копией условия, и любая правка обязана была попасть во все.
+ */
+function pplAddMetrics_(row, r) {
+  row.spend += Number(r.spend || 0);
+  row.impressions += Number(r.impressions || 0);
+  row.clicks += Number(r.clicks || 0);
+  row.link_clicks += Number(r.inline_link_clicks || 0);
+  (r.actions || []).forEach(function (a) {
+    if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
+      row.messages += Number(a.value || 0);
+    }
+  });
+  return row;
+}
+
+/** Сумма метрик по списку строк. */
+function pplSumMetrics_(rows) {
+  const t = pplZeroMetrics_();
+  rows.forEach(function (r) {
+    t.spend += r.spend; t.impressions += r.impressions; t.clicks += r.clicks;
+    t.link_clicks += r.link_clicks; t.messages += r.messages;
+  });
+  return t;
+}
+
+/** Бюджет Meta приходит в копейках/центах строкой. */
+function pplBudget_(v) {
+  return Number(v || 0) / 100;
+}
+
+/**
+ * Идентификаторы объявлений, которые Meta прямо сейчас считает
+ * работающими. effective_status — «настоящий» статус с учётом родителей:
+ * живое объявление внутри выключенной группы приходит как ADSET_PAUSED и
+ * в выборку не попадает. Спрашиваем только id — ответ маленький.
+ */
+function pplActiveAdIds_() {
+  const out = {};
+  pplAdAccounts_().forEach(function (acct) {
+    let url = acct + '/ads?effective_status=' + encodeURIComponent('["ACTIVE"]') +
+      '&fields=id&limit=500';
+    for (let page = 0; page < 4 && url; page++) {
+      const body = pplGraph_(url);
+      if (!body) break;
+      (body.data || []).forEach(function (r) { out[r.id] = true; });
+      url = body.paging && body.paging.next ? body.paging.next : null;
+    }
+  });
+  return out;
+}
+
 /* ============ 3c. Дневной отчёт по таргету ============ */
 
 /**
@@ -1236,9 +1314,16 @@ function pplDumpContactFields() {
  * «Сообщений» — это action_type messaging_conversation_started_7d:
  * человек из рекламы начал переписку. Производные метрики (CPC, CPM,
  * CTR, цена сообщения) страница считает сама из сырых чисел.
+ *
+ * part=active отдаёт другой отчёт — «что крутится прямо сейчас». Он
+ * висит на том же view намеренно: маршрутизация видов живёт в Код.gs,
+ * которого нет в репозитории, и каждый новый view — ещё один файл,
+ * который надо править вслепую в онлайн-редакторе. Тут же деплоится
+ * один people.gs.
  */
 function pplBuildDaily(params) {
   params = params || {};
+  if (params.part === 'active') return pplBuildActive(params);
   const until = params.until || pplIsoDate_(new Date());
   const since = params.since || until.slice(0, 8) + '01';   // по умолчанию с начала месяца
 
@@ -1264,17 +1349,8 @@ function pplBuildDaily(params) {
     if (resp.getResponseCode() !== 200) { partial = true; return; }
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       const d = r.date_start;
-      if (!byDate[d]) byDate[d] = { date: d, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
-      const row = byDate[d];
-      row.spend += Number(r.spend || 0);
-      row.impressions += Number(r.impressions || 0);
-      row.clicks += Number(r.clicks || 0);
-      row.link_clicks += Number(r.inline_link_clicks || 0);
-      (r.actions || []).forEach(function (a) {
-        if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
-          row.messages += Number(a.value || 0);
-        }
-      });
+      if (!byDate[d]) { byDate[d] = pplZeroMetrics_(); byDate[d].date = d; }
+      pplAddMetrics_(byDate[d], r);
       const cur = String(r.account_currency || '');
       if (cur) {
         if (!currency) currency = cur;
@@ -1290,7 +1366,8 @@ function pplBuildDaily(params) {
   pplAdAccounts_().forEach(function (acct) {
     let url = 'https://graph.facebook.com/' + FB_API_VERSION + '/' + acct + '/insights' +
       '?level=ad&time_increment=1' +
-      '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions' +
+      '&fields=ad_id,ad_name,adset_name,campaign_id,campaign_name,' +
+      'spend,impressions,clicks,inline_link_clicks,actions' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=500&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
     // страниц может быть несколько: объявления × дни
@@ -1318,17 +1395,8 @@ function pplBuildDaily(params) {
     }
     const p = byProfile[key];
     const d = r.date_start;
-    if (!p.byDate[d]) p.byDate[d] = { date: d, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
-    const row = p.byDate[d];
-    row.spend += Number(r.spend || 0);
-    row.impressions += Number(r.impressions || 0);
-    row.clicks += Number(r.clicks || 0);
-    row.link_clicks += Number(r.inline_link_clicks || 0);
-    (r.actions || []).forEach(function (a) {
-      if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
-        row.messages += Number(a.value || 0);
-      }
-    });
+    if (!p.byDate[d]) { p.byDate[d] = pplZeroMetrics_(); p.byDate[d].date = d; }
+    pplAddMetrics_(p.byDate[d], r);
   });
 
   const profiles = Object.keys(byProfile).map(function (k) {
@@ -1343,6 +1411,56 @@ function pplBuildDaily(params) {
     return s(b) - s(a);
   });
 
+  // --- те же деньги, но по конкретным объявлениям внутри кампаний ---
+  // Считается из уже скачанного perAd: отдельного запроса к Meta не нужно,
+  // дневные строки просто складываются по ad_id за весь период.
+  const activeIds = pplActiveAdIds_();
+  const byAd = {};
+  perAd.forEach(function (r) {
+    const id = r.ad_id;
+    if (!byAd[id]) {
+      const actor = map.actorByAd[id] || '';
+      byAd[id] = pplZeroMetrics_();
+      byAd[id].ad_id = id;
+      byAd[id].ad_name = r.ad_name || id;
+      byAd[id].adset_name = r.adset_name || '';
+      byAd[id].campaign_id = r.campaign_id || '';
+      byAd[id].campaign_name = r.campaign_name || '(кампания без названия)';
+      byAd[id].profile_id = actor;
+      byAd[id].profile = actor ? (map.names[actor] || actor) : '';
+      byAd[id].active = !!activeIds[id];
+      byAd[id].days = 0;
+      byAd[id].first_date = r.date_start;
+      byAd[id].last_date = r.date_start;
+    }
+    const a = byAd[id];
+    pplAddMetrics_(a, r);
+    // «дней в работе» считаем по дням с открученными деньгами: строка с
+    // нулём приходит и на день, когда объявление стояло на паузе
+    if (Number(r.spend || 0) > 0) a.days++;
+    if (r.date_start < a.first_date) a.first_date = r.date_start;
+    if (r.date_start > a.last_date) a.last_date = r.date_start;
+  });
+
+  const byCampaign = {};
+  Object.keys(byAd).forEach(function (id) {
+    const a = byAd[id];
+    const key = a.campaign_id || a.campaign_name;
+    if (!byCampaign[key]) {
+      byCampaign[key] = {
+        campaign_id: a.campaign_id, campaign_name: a.campaign_name, ads: []
+      };
+    }
+    byCampaign[key].ads.push(a);
+  });
+  const campaigns = Object.keys(byCampaign).map(function (k) {
+    const c = byCampaign[k];
+    c.ads.sort(function (x, y) { return y.spend - x.spend; });
+    c.totals = pplSumMetrics_(c.ads);
+    c.active_ads = c.ads.filter(function (a) { return a.active; }).length;
+    return c;
+  }).sort(function (a, b) { return b.totals.spend - a.totals.spend; });
+
   const days = Object.keys(byDate).sort().map(function (k) { return byDate[k]; });
   const out = {
     view: 'daily',
@@ -1353,11 +1471,170 @@ function pplBuildDaily(params) {
     mixed_currency: mixed,
     days: days,
     by_profile: profiles,
+    by_campaign: campaigns,
     partial: partial
   };
   try {
     const json = JSON.stringify(out);
     if (!partial && json.length < 100000) cache.put(cacheKey, json, 600);
+  } catch (e) {}
+  return out;
+}
+
+/* ============ 3d. Что крутится прямо сейчас ============ */
+
+/**
+ * Отчёт «Сейчас активно» (view=daily&part=active): дерево
+ * кампания → группа → объявление из того, что Meta прямо сейчас
+ * доставляет, с дневным бюджетом и цифрами за сегодня и за 7 дней.
+ *
+ * Активность берём у Meta, а не выводим из расхода: объявление могли
+ * включить час назад и оно ещё ничего не потратило, а вчерашний лидер
+ * может быть уже выключен. Фильтр effective_status=ACTIVE учитывает и
+ * родителей — выключенная кампания забирает с собой все свои объявления.
+ *
+ * Кэш короткий (5 минут): страницу открывают именно чтобы увидеть, что
+ * происходит сейчас, и получасовой кэш здесь врал бы по смыслу.
+ */
+function pplBuildActive(params) {
+  params = params || {};
+  const cache = CacheService.getScriptCache();
+  if (params.nocache !== '1') {
+    const hit = cache.get('active_now');
+    if (hit) return JSON.parse(hit);
+  }
+
+  let currency = '', mixed = false, partial = false;
+  const campaigns = {};       // campaign_id → кампания с группами и объявлениями
+  const adIds = [];
+  const today = {}, week = {};   // ad_id → метрики
+
+  pplAdAccounts_().forEach(function (acct) {
+    const info = pplGraph_(acct + '?fields=currency,name');
+    if (info && info.currency) {
+      if (!currency) currency = info.currency;
+      else if (currency !== info.currency) mixed = true;
+    }
+    const acctName = (info && info.name) || acct;
+
+    // 1. что сейчас доставляется
+    let url = acct + '/ads?effective_status=' + encodeURIComponent('["ACTIVE"]') +
+      // фигурные скобки в fields обязательно кодировать: UrlFetchApp
+      // отвергает такой адрес с «Invalid argument», а не ошибкой Meta
+      '&fields=' + encodeURIComponent(
+        'id,name,created_time,' +
+        'campaign{id,name,objective,daily_budget,lifetime_budget},' +
+        'adset{id,name,daily_budget,lifetime_budget,start_time,end_time}') +
+      '&limit=200';
+    for (let page = 0; page < 5 && url; page++) {
+      const body = pplGraph_(url);
+      if (!body) { partial = true; break; }
+      (body.data || []).forEach(function (a) {
+        const camp = a.campaign || {};
+        const set = a.adset || {};
+        const cid = camp.id || '(без кампании)';
+        if (!campaigns[cid]) {
+          campaigns[cid] = {
+            campaign_id: camp.id || '',
+            campaign_name: camp.name || '(кампания без названия)',
+            objective: camp.objective || '',
+            account: acctName,
+            daily_budget: pplBudget_(camp.daily_budget),
+            lifetime_budget: pplBudget_(camp.lifetime_budget),
+            adsets: {}
+          };
+        }
+        const sid = set.id || '(без группы)';
+        if (!campaigns[cid].adsets[sid]) {
+          campaigns[cid].adsets[sid] = {
+            adset_id: set.id || '',
+            adset_name: set.name || '(группа без названия)',
+            daily_budget: pplBudget_(set.daily_budget),
+            lifetime_budget: pplBudget_(set.lifetime_budget),
+            start_time: set.start_time || '',
+            end_time: set.end_time || '',
+            ads: []
+          };
+        }
+        campaigns[cid].adsets[sid].ads.push({
+          ad_id: a.id, ad_name: a.name || a.id, created_time: a.created_time || ''
+        });
+        if (adIds.indexOf(a.id) === -1) adIds.push(a.id);
+      });
+      url = body.paging && body.paging.next ? body.paging.next : null;
+    }
+
+    // 2. цифры: сегодня и за последние 7 дней
+    ['today', 'last_7d'].forEach(function (preset) {
+      let u = acct + '/insights?level=ad&date_preset=' + preset +
+        '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions&limit=500';
+      const bucket = preset === 'today' ? today : week;
+      for (let page = 0; page < 5 && u; page++) {
+        const body = pplGraph_(u);
+        if (!body) { partial = true; break; }
+        (body.data || []).forEach(function (r) {
+          if (!bucket[r.ad_id]) bucket[r.ad_id] = pplZeroMetrics_();
+          pplAddMetrics_(bucket[r.ad_id], r);
+        });
+        u = body.paging && body.paging.next ? body.paging.next : null;
+      }
+    });
+  });
+
+  const map = pplIgProfileMap_(adIds);
+
+  const out_campaigns = Object.keys(campaigns).map(function (cid) {
+    const c = campaigns[cid];
+    const adsets = Object.keys(c.adsets).map(function (sid) {
+      const s = c.adsets[sid];
+      s.ads = s.ads.map(function (a) {
+        const actor = map.actorByAd[a.ad_id] || '';
+        a.profile_id = actor;
+        a.profile = actor ? (map.names[actor] || actor) : '';
+        a.today = today[a.ad_id] || pplZeroMetrics_();
+        a.week = week[a.ad_id] || pplZeroMetrics_();
+        return a;
+      }).sort(function (x, y) { return y.week.spend - x.week.spend; });
+      s.today = pplSumMetrics_(s.ads.map(function (a) { return a.today; }));
+      s.week = pplSumMetrics_(s.ads.map(function (a) { return a.week; }));
+      return s;
+    }).sort(function (x, y) { return y.week.spend - x.week.spend; });
+
+    // при CBO бюджет задан на кампании, а у групп нули — тогда берём его
+    const setsBudget = adsets.reduce(function (t, s) { return t + s.daily_budget; }, 0);
+    return {
+      campaign_id: c.campaign_id, campaign_name: c.campaign_name,
+      objective: c.objective, account: c.account,
+      daily_budget: c.daily_budget || setsBudget,
+      budget_on_campaign: c.daily_budget > 0,
+      lifetime_budget: c.lifetime_budget,
+      adsets: adsets,
+      ads_count: adsets.reduce(function (t, s) { return t + s.ads.length; }, 0),
+      today: pplSumMetrics_(adsets.map(function (s) { return s.today; })),
+      week: pplSumMetrics_(adsets.map(function (s) { return s.week; }))
+    };
+  }).sort(function (a, b) { return b.week.spend - a.week.spend; });
+
+  const out = {
+    view: 'active',
+    updated: new Date().toISOString(),
+    currency: currency,
+    mixed_currency: mixed,
+    campaigns: out_campaigns,
+    totals: {
+      campaigns: out_campaigns.length,
+      adsets: out_campaigns.reduce(function (t, c) { return t + c.adsets.length; }, 0),
+      ads: out_campaigns.reduce(function (t, c) { return t + c.ads_count; }, 0),
+      daily_budget: out_campaigns.reduce(function (t, c) { return t + c.daily_budget; }, 0),
+      today: pplSumMetrics_(out_campaigns.map(function (c) { return c.today; })),
+      week: pplSumMetrics_(out_campaigns.map(function (c) { return c.week; }))
+    },
+    partial: partial
+  };
+
+  try {
+    const json = JSON.stringify(out);
+    if (!partial && json.length < 100000) cache.put('active_now', json, 300);
   } catch (e) {}
   return out;
 }
