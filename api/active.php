@@ -9,8 +9,9 @@
 //
 // Активность берём у Meta, а не выводим из расхода: объявление могли
 // включить час назад и оно ещё ничего не потратило, а вчерашний лидер
-// может быть уже выключен. Фильтр effective_status=ACTIVE учитывает и
-// родителей — выключенная кампания забирает с собой все свои объявления.
+// может быть уже выключен. Но одного effective_status мало — объявление
+// с законченным расписанием Meta продолжает звать ACTIVE, см.
+// meta_is_delivering в lib.php.
 declare(strict_types=1);
 
 require_once __DIR__ . '/lib.php';
@@ -27,6 +28,8 @@ if (($_GET['nocache'] ?? '') !== '1') {
 
 $currency = '';
 $mixed = false;
+$nowTs = time();
+$finished = 0;      // отсеяно как «уже отработало»
 $campaigns = [];      // campaign_id => кампания с группами и объявлениями
 $adIds = [];
 $today = [];
@@ -43,11 +46,14 @@ foreach (cfg()['meta']['accounts'] as $accId => $accLabel) {
 
     // 1. что сейчас доставляется
     $ads = meta_get_all('/act_' . $accId . '/ads?effective_status=' . urlencode('["ACTIVE"]')
-        . '&fields=' . urlencode('id,name,created_time,'
-            . 'campaign{id,name,objective,daily_budget,lifetime_budget},'
+        . '&fields=' . urlencode('id,name,effective_status,created_time,'
+            . 'campaign{id,name,objective,daily_budget,lifetime_budget,stop_time},'
             . 'adset{id,name,daily_budget,lifetime_budget,start_time,end_time}')
-        . '&limit=200', 5);
+        . '&limit=200', 6);
     foreach ($ads as $a) {
+        // отработавшее своё объявление Meta продолжает звать ACTIVE —
+        // см. meta_is_delivering, без этой отсечки отчёт врёт в сотни раз
+        if (!meta_is_delivering($a, $nowTs)) { $finished++; continue; }
         $camp = $a['campaign'] ?? [];
         $set = $a['adset'] ?? [];
         $cid = (string)($camp['id'] ?? '') !== '' ? (string)$camp['id'] : '(без кампании)';
@@ -172,6 +178,7 @@ $out = [
     'currency' => $currency,
     'mixed_currency' => $mixed,
     'campaigns' => $outCampaigns,
+    'finished' => $finished,
     'totals' => [
         'campaigns' => count($outCampaigns),
         'adsets' => array_sum(array_map(fn($c) => count($c['adsets']), $outCampaigns)),

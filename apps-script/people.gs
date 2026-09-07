@@ -1283,25 +1283,87 @@ function pplBudget_(v) {
   return Number(v || 0) / 100;
 }
 
+/** Поля, по которым видно, доставляется объявление или уже нет. */
+const PPL_DELIVERY_FIELDS =
+  'id,effective_status,campaign{stop_time},adset{end_time}';
+
 /**
- * Идентификаторы объявлений, которые Meta прямо сейчас считает
- * работающими. effective_status — «настоящий» статус с учётом родителей:
- * живое объявление внутри выключенной группы приходит как ADSET_PAUSED и
- * в выборку не попадает. Спрашиваем только id — ответ маленький.
+ * Объявление действительно крутится?
+ *
+ * Одного effective_status мало, и это главная ловушка Meta. У кампании с
+ * законченным расписанием Ads Manager пишет «Завершено», а объявление
+ * внутри неё продолжает отдаваться как ACTIVE — статуса «завершено» на
+ * уровне объявления в API просто нет. У поднятых из ленты публикаций
+ * расписание конечное всегда, поэтому без проверки дат «активными»
+ * оказывались все посты, поднятые за годы: 325 кампаний вместо десятка.
+ *
+ * Поэтому три условия: сам статус ACTIVE (фильтр запроса дублируем в
+ * коде — если Meta его однажды проигнорирует, отчёт не должен молча
+ * раздуться), расписание группы не закончилось и кампания не остановлена
+ * по времени. Группа без end_time крутится бессрочно — её оставляем.
  */
-function pplActiveAdIds_() {
-  const out = {};
+function pplIsDelivering_(a, nowMs) {
+  if (String(a.effective_status || '') !== 'ACTIVE') return false;
+  const end = (a.adset || {}).end_time;
+  if (end && new Date(end).getTime() < nowMs) return false;
+  const stop = (a.campaign || {}).stop_time;
+  if (stop && new Date(stop).getTime() < nowMs) return false;
+  return true;
+}
+
+/** Все объявления кабинетов с полями доставки; пусто, если Meta не ответила. */
+function pplFetchAdsForDelivery_(extraFields, limit) {
+  const rows = [];
   pplAdAccounts_().forEach(function (acct) {
     let url = acct + '/ads?effective_status=' + encodeURIComponent('["ACTIVE"]') +
-      '&fields=id&limit=500';
-    for (let page = 0; page < 4 && url; page++) {
+      // фигурные скобки в fields обязательно кодировать: UrlFetchApp
+      // отвергает такой адрес с «Invalid argument», а не ошибкой Meta
+      '&fields=' + encodeURIComponent(extraFields || PPL_DELIVERY_FIELDS) +
+      '&limit=' + (limit || 500);
+    for (let page = 0; page < 6 && url; page++) {
       const body = pplGraph_(url);
-      if (!body) break;
-      (body.data || []).forEach(function (r) { out[r.id] = true; });
+      if (!body) { rows.partial = true; break; }
+      (body.data || []).forEach(function (r) { rows.push(r); });
       url = body.paging && body.paging.next ? body.paging.next : null;
     }
   });
+  return rows;
+}
+
+/** Идентификаторы объявлений, которые Meta прямо сейчас доставляет. */
+function pplActiveAdIds_() {
+  const out = {};
+  const now = Date.now();
+  pplFetchAdsForDelivery_().forEach(function (a) {
+    if (pplIsDelivering_(a, now)) out[a.id] = true;
+  });
   return out;
+}
+
+/**
+ * Диагностика к отчёту «Сейчас активно»: показывает, сколько объявлений
+ * Meta считает ACTIVE и сколько из них на самом деле уже отработали своё.
+ * Запускать из редактора, смотреть журнал выполнения.
+ */
+function pplDiagActive() {
+  const now = Date.now();
+  const rows = pplFetchAdsForDelivery_();
+  let notActive = 0, finished = 0, live = 0;
+  const examples = [];
+  rows.forEach(function (a) {
+    if (String(a.effective_status || '') !== 'ACTIVE') { notActive++; return; }
+    if (pplIsDelivering_(a, now)) { live++; return; }
+    finished++;
+    if (examples.length < 5) {
+      examples.push(a.id + ' | группа до ' + ((a.adset || {}).end_time || '—') +
+        ' | кампания до ' + ((a.campaign || {}).stop_time || '—'));
+    }
+  });
+  Logger.log('Meta отдала объявлений: ' + rows.length);
+  Logger.log('  не ACTIVE (фильтр запроса не сработал): ' + notActive);
+  Logger.log('  ACTIVE, но расписание кончилось: ' + finished);
+  Logger.log('  реально крутится: ' + live);
+  examples.forEach(function (e) { Logger.log('  пример завершённого: ' + e); });
 }
 
 /* ============ 3c. Дневной отчёт по таргету ============ */
@@ -1508,6 +1570,8 @@ function pplBuildActive(params) {
   const campaigns = {};       // campaign_id → кампания с группами и объявлениями
   const adIds = [];
   const today = {}, week = {};   // ad_id → метрики
+  const nowMs = Date.now();
+  let finished = 0;           // отсеяно как «уже отработало»
 
   pplAdAccounts_().forEach(function (acct) {
     const info = pplGraph_(acct + '?fields=currency,name');
@@ -1522,14 +1586,17 @@ function pplBuildActive(params) {
       // фигурные скобки в fields обязательно кодировать: UrlFetchApp
       // отвергает такой адрес с «Invalid argument», а не ошибкой Meta
       '&fields=' + encodeURIComponent(
-        'id,name,created_time,' +
-        'campaign{id,name,objective,daily_budget,lifetime_budget},' +
+        'id,name,effective_status,created_time,' +
+        'campaign{id,name,objective,daily_budget,lifetime_budget,stop_time},' +
         'adset{id,name,daily_budget,lifetime_budget,start_time,end_time}') +
       '&limit=200';
-    for (let page = 0; page < 5 && url; page++) {
+    for (let page = 0; page < 6 && url; page++) {
       const body = pplGraph_(url);
       if (!body) { partial = true; break; }
       (body.data || []).forEach(function (a) {
+        // отработавшее своё объявление Meta продолжает звать ACTIVE —
+        // см. pplIsDelivering_, без этой отсечки отчёт врёт в сотни раз
+        if (!pplIsDelivering_(a, nowMs)) { finished++; return; }
         const camp = a.campaign || {};
         const set = a.adset || {};
         const cid = camp.id || '(без кампании)';
@@ -1621,6 +1688,7 @@ function pplBuildActive(params) {
     currency: currency,
     mixed_currency: mixed,
     campaigns: out_campaigns,
+    finished: finished,
     totals: {
       campaigns: out_campaigns.length,
       adsets: out_campaigns.reduce(function (t, c) { return t + c.adsets.length; }, 0),

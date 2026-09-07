@@ -145,19 +145,52 @@ function meta_get_all(string $pathAndQuery, int $maxPages = 5): array {
     return $rows;
 }
 
+/** Поля, по которым видно, доставляется объявление или уже нет. */
+const META_DELIVERY_FIELDS = 'id,effective_status,campaign{stop_time},adset{end_time}';
+
 /**
- * Идентификаторы объявлений, которые Meta прямо сейчас доставляет.
- * effective_status — «настоящий» статус с учётом родителей: живое
- * объявление в выключенной группе приходит как ADSET_PAUSED и в выборку
- * не попадает. Спрашиваем только id — ответ маленький.
+ * Объявление действительно крутится?
+ *
+ * Одного effective_status мало, и это главная ловушка Meta. У кампании с
+ * законченным расписанием Ads Manager пишет «Завершено», а объявление
+ * внутри неё продолжает отдаваться как ACTIVE — статуса «завершено» на
+ * уровне объявления в API просто нет. У поднятых из ленты публикаций
+ * расписание конечное всегда, поэтому без проверки дат «активными»
+ * оказывались все посты, поднятые за годы.
+ *
+ * Фильтр запроса дублируем в коде: если Meta его однажды проигнорирует,
+ * отчёт не должен молча раздуться. Группа без end_time крутится
+ * бессрочно — её оставляем.
  */
-function meta_active_ad_ids(): array {
-    $out = [];
+function meta_is_delivering(array $a, int $nowTs): bool {
+    if ((string)($a['effective_status'] ?? '') !== 'ACTIVE') return false;
+    $end = $a['adset']['end_time'] ?? '';
+    if ($end !== '' && strtotime((string)$end) < $nowTs) return false;
+    $stop = $a['campaign']['stop_time'] ?? '';
+    if ($stop !== '' && strtotime((string)$stop) < $nowTs) return false;
+    return true;
+}
+
+/** Все объявления кабинетов с полями доставки. */
+function meta_fetch_ads_for_delivery(string $fields = '', int $limit = 500): array {
+    $rows = [];
     foreach (array_keys(cfg()['meta']['accounts']) as $accId) {
         foreach (meta_get_all('/act_' . $accId . '/ads?effective_status='
-            . urlencode('["ACTIVE"]') . '&fields=id&limit=500', 4) as $r) {
-            $out[(string)($r['id'] ?? '')] = true;
+            . urlencode('["ACTIVE"]')
+            . '&fields=' . urlencode($fields !== '' ? $fields : META_DELIVERY_FIELDS)
+            . '&limit=' . $limit, 6) as $r) {
+            $rows[] = $r;
         }
+    }
+    return $rows;
+}
+
+/** Идентификаторы объявлений, которые Meta прямо сейчас доставляет. */
+function meta_active_ad_ids(): array {
+    $out = [];
+    $now = time();
+    foreach (meta_fetch_ads_for_delivery() as $a) {
+        if (meta_is_delivering($a, $now)) $out[(string)($a['id'] ?? '')] = true;
     }
     unset($out['']);
     return $out;

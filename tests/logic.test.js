@@ -801,6 +801,49 @@ test('даты-объекты из листа сравниваются с дат
   assert.strictEqual(r.revenue, 250);
 });
 
+/* ---------- «крутится прямо сейчас» ---------- */
+// Ловушка Meta: у кампании с законченным расписанием объявление
+// продолжает отдаваться как ACTIVE. Без проверки дат отчёт показывал
+// 325 «активных» кампаний вместо десятка — все поднятые за годы посты.
+
+const isDelivering_ = sandbox.pplIsDelivering_;
+const NOW = Date.parse('2026-09-07T19:00:00Z');
+
+console.log('\nЧто крутится прямо сейчас');
+
+test('активное объявление без конца расписания крутится', () => {
+  assert.strictEqual(isDelivering_({ effective_status: 'ACTIVE' }, NOW), true);
+});
+
+test('активное с концом расписания в будущем крутится', () => {
+  assert.strictEqual(isDelivering_({
+    effective_status: 'ACTIVE',
+    adset: { end_time: '2026-09-30T00:00:00+0300' }
+  }, NOW), true);
+});
+
+test('поднятая публикация с законченным расписанием не крутится', () => {
+  assert.strictEqual(isDelivering_({
+    effective_status: 'ACTIVE',
+    adset: { end_time: '2024-05-01T00:00:00+0300' }
+  }, NOW), false);
+});
+
+test('остановленная по времени кампания забирает объявление', () => {
+  assert.strictEqual(isDelivering_({
+    effective_status: 'ACTIVE',
+    campaign: { stop_time: '2026-09-01T00:00:00+0300' }
+  }, NOW), false);
+});
+
+test('выключенная группа: объявление приходит как ADSET_PAUSED', () => {
+  assert.strictEqual(isDelivering_({ effective_status: 'ADSET_PAUSED' }, NOW), false);
+});
+
+test('статуса нет вовсе — не считаем крутящимся', () => {
+  assert.strictEqual(isDelivering_({}, NOW), false);
+});
+
 /* ---------- метрики Meta Ads ---------- */
 // Эти хелперы обслуживают и дни, и профили, и разбивку по объявлениям,
 // и «Сейчас активно» — ошибка в них разъедется сразу по четырём отчётам.
