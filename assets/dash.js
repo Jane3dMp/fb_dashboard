@@ -24,8 +24,14 @@ const KEY_STORAGE = 'fb_dash_key';
 
 /* ---------- замок ---------- */
 
+/**
+ * Хранилище доступно не всегда: в приватном окне и при запрете данных
+ * сайта сам доступ к sessionStorage бросает исключение. Раньше оно
+ * летело из первой же строки файла и обрывало выполнение — страница
+ * оставалась без замка и без всего, что объявлено ниже.
+ */
 function dashKey() {
-  return sessionStorage.getItem(KEY_STORAGE) || '';
+  try { return sessionStorage.getItem(KEY_STORAGE) || ''; } catch (e) { return ''; }
 }
 
 function showGate(message) {
@@ -49,7 +55,7 @@ function checkPass(e) {
   e.preventDefault();
   const input = document.getElementById('passInput');
   if (!input.value) return false;
-  sessionStorage.setItem(KEY_STORAGE, input.value);
+  try { sessionStorage.setItem(KEY_STORAGE, input.value); } catch (e) {}
   document.getElementById('gate').style.display = 'none';
   if (typeof loadData === 'function') loadData();
   return false;
@@ -73,7 +79,7 @@ async function api(query) {
   const base = HOSTED_VIEWS[view] || GAS_URL;
   const resp = await fetch(base + '?' + query + '&key=' + encodeURIComponent(dashKey()));
   if (resp.status === 401 || resp.status === 403) {
-    sessionStorage.removeItem(KEY_STORAGE);
+    try { sessionStorage.removeItem(KEY_STORAGE); } catch (e) {}
     showGate('Неверный пароль');
     throw new Error('Нужен пароль');
   }
@@ -81,10 +87,87 @@ async function api(query) {
   // Apps Script в норме отвечает 200 на всё, поэтому отказ доступа
   // может прийти и полем в теле ответа
   if (data.error === 'unauthorized') {
-    sessionStorage.removeItem(KEY_STORAGE);
+    try { sessionStorage.removeItem(KEY_STORAGE); } catch (e) {}
     showGate('Неверный пароль');
     throw new Error('Нужен пароль');
   }
   if (data.error) throw new Error(data.error);
   return data;
 }
+
+/* ---------- превью креативов ---------- */
+
+/**
+ * Миниатюра объявления и просмотр её крупно по клику.
+ *
+ * Живёт здесь, а не в двух копиях: картинки нужны и «Дням», и «Сейчас
+ * активно», а разметка с поведением и стилем должны меняться вместе —
+ * помощник, который молча зависит от CSS в чужом файле, ломается тихо.
+ */
+
+/** Экранирование значения атрибута: ссылку даёт Meta, доверять ей нельзя. */
+function attr(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** <img> миниатюры креатива; серый прямоугольник, если картинки нет. */
+function thumbImg(url) {
+  if (!url) return '<span class="thumb"></span>';
+  return '<img class="thumb" loading="lazy" referrerpolicy="no-referrer" alt="" ' +
+    'src="' + attr(url) + '" ' +
+    // ссылки Meta подписанные и однажды протухают — тогда вместо битой
+    // картинки остаётся тот же серый прямоугольник
+    'onerror="this.removeAttribute(\'src\');this.removeAttribute(\'onerror\')">';
+}
+
+/** Первая ячейка строки объявления: миниатюра, название и подпись под ним. */
+function adCell(url, title, sub) {
+  return '<div class="adcell">' + thumbImg(url) +
+    '<div>' + title + (sub ? '<small>' + sub + '</small>' : '') + '</div></div>';
+}
+
+/**
+ * Один слушатель на документ, а не на каждой картинке: таблицы
+ * перерисовываются при каждом переключении режима, и слушателей пришлось
+ * бы вешать заново.
+ */
+function initThumbLightbox() {
+  const css = document.createElement('style');
+  css.textContent =
+    '.adcell{display:flex;gap:10px;align-items:flex-start}' +
+    '.adcell>div{min-width:0}' +
+    '.thumb{width:44px;height:44px;flex:0 0 44px;border-radius:8px;' +
+      'object-fit:cover;background:var(--line,#EBE6DB);display:block}' +
+    'img.thumb{cursor:zoom-in}' +
+    '.lightbox{position:fixed;inset:0;background:rgba(28,27,25,.72);z-index:60;' +
+      'display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}' +
+    '.lightbox img{max-width:min(90vw,520px);max-height:86vh;border-radius:12px;' +
+      'box-shadow:0 8px 40px rgba(0,0,0,.35)}' +
+    '@media print{.lightbox{display:none !important}}';
+  document.head.appendChild(css);
+
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.style.display = 'none';
+  const big = document.createElement('img');
+  big.alt = '';
+  big.referrerPolicy = 'no-referrer';
+  box.appendChild(big);
+  document.body.appendChild(box);
+
+  document.addEventListener('click', function (e) {
+    const t = e.target.closest && e.target.closest('img.thumb');
+    if (t && t.src) { big.src = t.src; box.style.display = 'flex'; return; }
+    box.style.display = 'none';
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') box.style.display = 'none';
+  });
+}
+
+// Файл подключён в конце <body> на всех страницах, поэтому ни head, ни
+// body ждать не надо. Через DOMContentLoaded было хуже: стоило чему-то
+// выше бросить исключение — и стили миниатюр не появлялись вовсе.
+initThumbLightbox();

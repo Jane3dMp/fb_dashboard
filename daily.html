@@ -48,7 +48,7 @@
   td:first-child{text-align:left}
   td.zero{color:#c9c4b8}
   tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
-  td.name{white-space:normal;min-width:190px;max-width:340px;line-height:1.35}
+  td.name{white-space:normal;min-width:260px;max-width:360px;line-height:1.35}
   td.name small{display:block;color:var(--ink2);font-size:11px;margin-top:1px}
   .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
   .blockhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
@@ -328,9 +328,9 @@ function renderAds(d, campaigns) {
         ? dmy(a.first_date)
         : dmy(a.first_date) + ' — ' + dmy(a.last_date);
       const meta = [a.adset_name, a.profile, period].filter(Boolean).map(esc).join(' · ');
-      const label = (a.active ? '<span class="live" title="крутится сейчас"></span>' : '') +
-        esc(a.ad_name) + (meta ? '<small>' + meta + '</small>' : '');
-      tb.appendChild(row(label, a, false, 'name'));
+      const title = (a.active ? '<span class="live" title="крутится сейчас"></span>' : '') +
+        esc(a.ad_name);
+      tb.appendChild(row(adCell(a.thumb, title, meta), a, false, 'name'));
     });
     tb.appendChild(row('Итого по кампании', c.totals, true, 'name'));
     holder.appendChild(block);

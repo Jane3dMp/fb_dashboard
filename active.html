@@ -52,7 +52,7 @@
   td{padding:8px 7px;border-bottom:1px solid var(--line);text-align:right}
   td:first-child{text-align:left}
   td.zero{color:#c9c4b8}
-  td.name{white-space:normal;min-width:190px;max-width:340px;line-height:1.35}
+  td.name{white-space:normal;min-width:260px;max-width:360px;line-height:1.35}
   td.name small{display:block;color:var(--ink2);font-size:11px;margin-top:1px}
   tr.grp td{background:var(--yellow-soft);font-weight:600}
   tr.grp td.name{padding-top:10px}
@@ -258,9 +258,7 @@ function render(d) {
       tb.appendChild(row(
         esc(s.adset_name) + (sub ? '<small>' + sub + '</small>' : ''), s, 'grp'));
       s.ads.forEach(a => {
-        const label = esc(a.ad_name) +
-          (a.profile ? '<small>' + esc(a.profile) + '</small>' : '');
-        tb.appendChild(row(label, a, ''));
+        tb.appendChild(row(adCell(a.thumb, esc(a.ad_name), esc(a.profile)), a, ''));
       });
     });
     tb.appendChild(row('Итого по кампании', c, 'total'));

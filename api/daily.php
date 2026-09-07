@@ -182,9 +182,18 @@ foreach ($byAd as $a) {
     }
     $byCampaign[$key]['ads'][] = $a;
 }
+$thumbs = meta_ad_thumbs(array_keys($byAd));
 $campaigns = [];
 foreach ($byCampaign as $c) {
     usort($c['ads'], fn($x, $y) => $y['spend'] <=> $x['spend']);
+    foreach ($c['ads'] as $i => $a) {
+        $c['ads'][$i]['thumb'] = $thumbs[$a['ad_id']] ?? '';
+        // название кампании уже есть у самой кампании, а profile_id странице
+        // не нужен: на длинном периоде объявлений сотни, и лишние поля
+        // раздувают ответ
+        unset($c['ads'][$i]['campaign_id'], $c['ads'][$i]['campaign_name'],
+              $c['ads'][$i]['profile_id']);
+    }
     $c['totals'] = metrics_sum($c['ads']);
     $c['active_ads'] = count(array_filter($c['ads'], fn($a) => $a['active']));
     $campaigns[] = $c;

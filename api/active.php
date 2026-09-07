@@ -134,6 +134,8 @@ if ($ask) {
     cache_put('ig_names', ['map' => $known]);
 }
 
+$thumbs = meta_ad_thumbs(array_keys($adIds));
+
 /* --- сборка дерева --- */
 $outCampaigns = [];
 foreach ($campaigns as $c) {
@@ -144,6 +146,7 @@ foreach ($campaigns as $c) {
             $label = $igNames[$actor] ?? (($known[$actor] ?? '') !== '' ? $known[$actor] : $actor);
             $s['ads'][$i]['profile_id'] = $actor;
             $s['ads'][$i]['profile'] = $actor !== '' ? $label : '';
+            $s['ads'][$i]['thumb'] = $thumbs[$a['ad_id']] ?? '';
             $s['ads'][$i]['today'] = $today[$a['ad_id']] ?? metrics_zero();
             $s['ads'][$i]['week'] = $week[$a['ad_id']] ?? metrics_zero();
         }

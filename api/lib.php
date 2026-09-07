@@ -185,6 +185,45 @@ function meta_fetch_ads_for_delivery(string $fields = '', int $limit = 500): arr
     return $rows;
 }
 
+/**
+ * Картинка креатива на каждое объявление: [ad_id => url].
+ *
+ * Отдельным запросом от связки «объявление → профиль», хотя оба
+ * спрашивают creative: размер миниатюры задаётся параметром поля, и если
+ * Meta перестанет этот синтаксис понимать, упасть должны картинки, а не
+ * разбивка по профилям — на ней держатся все деньги. Поэтому же есть
+ * запасной запрос без параметров.
+ *
+ * Ссылки подписанные и живут не вечно — кэш 6 часов, как у креативов.
+ */
+function meta_ad_thumbs(array $adIds): array {
+    $adIds = array_values(array_filter($adIds));
+    if (!$adIds) return [];
+
+    $cached = cache_get('ad_thumbs', 6 * 3600) ?? [];
+    $map = $cached['map'] ?? [];
+    $missing = array_values(array_filter($adIds, fn($id) => !array_key_exists($id, $map)));
+    for ($i = 0; $i < count($missing); $i += 25) {
+        $chunk = array_slice($missing, $i, 25);
+        $ids = '/?ids=' . urlencode(implode(',', $chunk));
+        $data = meta_get($ids . '&fields=' . urlencode(
+            'creative.thumbnail_width(320).thumbnail_height(320){thumbnail_url}'));
+        if (!$data) $data = meta_get($ids . '&fields=' . urlencode('creative{thumbnail_url}'));
+        foreach ($chunk as $id) {
+            // пустоту тоже запоминаем, иначе объявления без картинки будем
+            // спрашивать у Meta при каждой загрузке страницы
+            $map[$id] = (string)($data[$id]['creative']['thumbnail_url'] ?? '');
+        }
+    }
+    if ($missing) cache_put('ad_thumbs', ['map' => $map]);
+
+    $out = [];
+    foreach ($adIds as $id) {
+        if (($map[$id] ?? '') !== '') $out[$id] = $map[$id];
+    }
+    return $out;
+}
+
 /** Идентификаторы объявлений, которые Meta прямо сейчас доставляет. */
 function meta_active_ad_ids(): array {
     $out = [];

@@ -1330,6 +1330,54 @@ function pplFetchAdsForDelivery_(extraFields, limit) {
   return rows;
 }
 
+/**
+ * Картинка креатива на каждое объявление: { ad_id: url }.
+ *
+ * Отдельным запросом от pplIgProfileMap_, хотя оба спрашивают creative:
+ * размер миниатюры задаётся параметром поля (`.thumbnail_width(320)`), и
+ * если Meta однажды перестанет этот синтаксис понимать, упасть должны
+ * картинки, а не разбивка по профилям — на ней держатся все деньги.
+ * Поэтому же есть запасной запрос без параметров: лучше мыльные 64×320,
+ * чем пустые строки.
+ *
+ * Ссылки подписанные и живут не вечно, поэтому кэш 6 часов — как у
+ * креативов: страница всё равно перезапрашивает JSON каждые 5–10 минут.
+ */
+function pplAdThumbs_(adIds) {
+  const out = {};
+  if (!adIds || !adIds.length) return out;
+
+  const cache = CacheService.getScriptCache();
+  const cached = cache.getAll(adIds.map(function (id) { return 'thumb_' + id; }));
+  const missing = [];
+  adIds.forEach(function (id) {
+    const v = cached['thumb_' + id];
+    if (v === undefined) missing.push(id);
+    else if (v) out[id] = v;
+  });
+
+  for (let i = 0; i < missing.length; i += 25) {
+    const chunk = missing.slice(i, i + 25);
+    const ids = '?ids=' + encodeURIComponent(chunk.join(','));
+    let body = pplGraph_(ids + '&fields=' + encodeURIComponent(
+      'creative.thumbnail_width(320).thumbnail_height(320){thumbnail_url}'));
+    if (!body) {
+      body = pplGraph_(ids + '&fields=' + encodeURIComponent('creative{thumbnail_url}'));
+    }
+    if (!body) continue;
+    const toCache = {};
+    chunk.forEach(function (id) {
+      const url = ((body[id] || {}).creative || {}).thumbnail_url || '';
+      // пустоту тоже запоминаем, иначе объявления без картинки будем
+      // спрашивать у Meta при каждой загрузке страницы
+      toCache['thumb_' + id] = url;
+      if (url) out[id] = url;
+    });
+    cache.putAll(toCache, 21600);
+  }
+  return out;
+}
+
 /** Идентификаторы объявлений, которые Meta прямо сейчас доставляет. */
 function pplActiveAdIds_() {
   const out = {};
@@ -1515,9 +1563,17 @@ function pplBuildDaily(params) {
     }
     byCampaign[key].ads.push(a);
   });
+  const thumbs = pplAdThumbs_(Object.keys(byAd));
   const campaigns = Object.keys(byCampaign).map(function (k) {
     const c = byCampaign[k];
     c.ads.sort(function (x, y) { return y.spend - x.spend; });
+    c.ads.forEach(function (a) {
+      a.thumb = thumbs[a.ad_id] || '';
+      // название кампании уже есть у самой кампании, а profile_id странице
+      // не нужен: на длинном периоде объявлений сотни, и лишние поля
+      // пробивают 100 КБ — потолок значения в CacheService
+      delete a.campaign_id; delete a.campaign_name; delete a.profile_id;
+    });
     c.totals = pplSumMetrics_(c.ads);
     c.active_ads = c.ads.filter(function (a) { return a.active; }).length;
     return c;
@@ -1649,6 +1705,7 @@ function pplBuildActive(params) {
   });
 
   const map = pplIgProfileMap_(adIds);
+  const thumbs = pplAdThumbs_(adIds);
 
   const out_campaigns = Object.keys(campaigns).map(function (cid) {
     const c = campaigns[cid];
@@ -1658,6 +1715,7 @@ function pplBuildActive(params) {
         const actor = map.actorByAd[a.ad_id] || '';
         a.profile_id = actor;
         a.profile = actor ? (map.names[actor] || actor) : '';
+        a.thumb = thumbs[a.ad_id] || '';
         a.today = today[a.ad_id] || pplZeroMetrics_();
         a.week = week[a.ad_id] || pplZeroMetrics_();
         return a;
