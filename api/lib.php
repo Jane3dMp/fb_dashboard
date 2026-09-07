@@ -145,6 +145,72 @@ function meta_get_all(string $pathAndQuery, int $maxPages = 5): array {
     return $rows;
 }
 
+/** Что означает account_status рекламного кабинета. */
+const META_ACCOUNT_STATUS = [
+    1 => 'работает', 2 => 'отключён', 3 => 'есть неоплаченная задолженность',
+    7 => 'на проверке', 8 => 'ждёт списания', 9 => 'отсрочка платежа',
+    100 => 'готовится к закрытию', 101 => 'закрыт',
+];
+
+/** Почему кабинет отключили. */
+const META_DISABLE_REASON = [
+    1 => 'нарушение рекламной политики', 2 => 'проверка прав на контент',
+    3 => 'проблема с платежом', 4 => 'кабинет закрыт', 5 => 'проверка AFC',
+    6 => 'проверка бизнеса', 7 => 'закрыт навсегда',
+    8 => 'кабинет не использовался', 9 => 'кабинет не использовался',
+];
+
+/**
+ * Состояние рекламных кабинетов.
+ *
+ * Без этого «Сейчас активно» врёт в самый неподходящий момент: когда не
+ * проходит платёж, Meta останавливает показы на уровне кабинета, а у
+ * объявлений остаётся статус ACTIVE и расписание в будущем.
+ *
+ * Лимит затрат глушит показы не хуже отключённого кабинета, поэтому
+ * считаем и его. Если Meta не ответила — считаем кабинет рабочим и
+ * помечаем unknown: ложная тревога хуже молчания.
+ */
+function meta_account_statuses(): array {
+    $hit = cache_get('acct_status', 300);
+    if ($hit !== null) return $hit;
+
+    $out = [];
+    foreach (cfg()['meta']['accounts'] as $accId => $label) {
+        $acct = 'act_' . $accId;
+        $info = meta_get('/' . $acct . '?fields='
+            . urlencode('name,currency,account_status,disable_reason,spend_cap,amount_spent'));
+        if (!$info) {
+            $out[$acct] = ['id' => $acct, 'name' => (string)$label, 'ok' => true, 'unknown' => true];
+            continue;
+        }
+        $st = (int)($info['account_status'] ?? 0);
+        $cap = meta_budget($info['spend_cap'] ?? 0);
+        $spent = meta_budget($info['amount_spent'] ?? 0);
+        $reason = (int)($info['disable_reason'] ?? 0);
+        $out[$acct] = [
+            'id' => $acct,
+            'name' => (string)($info['name'] ?? $label),
+            'currency' => (string)($info['currency'] ?? ''),
+            'status' => $st,
+            // «работает» — только явный ACTIVE
+            'ok' => $st === 1,
+            'status_text' => META_ACCOUNT_STATUS[$st] ?? ('статус ' . $st),
+            'reason' => META_DISABLE_REASON[$reason] ?? '',
+            'spend_cap' => $cap,
+            'amount_spent' => $spent,
+            'cap_reached' => $cap > 0 && $spent >= $cap,
+        ];
+    }
+    cache_put('acct_status', $out);
+    return $out;
+}
+
+/** Кабинет доставляет рекламу? Остановленный не доставляет ничего. */
+function meta_account_delivers(?array $acc): bool {
+    return $acc === null || (($acc['ok'] ?? true) && !($acc['cap_reached'] ?? false));
+}
+
 /** Поля, по которым видно, доставляется объявление или уже нет. */
 const META_DELIVERY_FIELDS = 'id,effective_status,campaign{stop_time},adset{end_time}';
 
@@ -179,6 +245,7 @@ function meta_fetch_ads_for_delivery(string $fields = '', int $limit = 500): arr
             . urlencode('["ACTIVE"]')
             . '&fields=' . urlencode($fields !== '' ? $fields : META_DELIVERY_FIELDS)
             . '&limit=' . $limit, 6) as $r) {
+            $r['account'] = 'act_' . $accId;
             $rows[] = $r;
         }
     }
@@ -228,7 +295,11 @@ function meta_ad_thumbs(array $adIds): array {
 function meta_active_ad_ids(): array {
     $out = [];
     $now = time();
+    $accounts = meta_account_statuses();
     foreach (meta_fetch_ads_for_delivery() as $a) {
+        // остановленный кабинет не доставляет ничего, кем бы объявление
+        // себя ни считало — иначе зелёная точка горит у мёртвых строк
+        if (!meta_account_delivers($accounts[$a['account'] ?? ''] ?? null)) continue;
         if (meta_is_delivering($a, $now)) $out[(string)($a['id'] ?? '')] = true;
     }
     unset($out['']);

@@ -59,6 +59,9 @@
   tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
   .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
   .note{background:var(--yellow-soft);border-radius:14px;padding:14px 18px;font-size:13.5px;line-height:1.55;color:var(--ink);margin-top:14px}
+  .note.alarm{background:#FBE4E1;border:1px solid #F0BDB6}
+  .note.alarm b{color:var(--red)}
+  .paused{color:var(--red);font-weight:600}
 
   #status{max-width:1160px;margin:0 auto;padding:30px 24px;color:var(--ink2)}
   #status.error{color:var(--red)}
@@ -123,6 +126,7 @@
   <div id="status">Загрузка…</div>
 
   <div id="content" style="display:none">
+    <div id="accountAlarm"></div>
     <div class="cards" id="cards"></div>
     <div id="filtered"></div>
     <div id="blocks"></div>
@@ -132,7 +136,10 @@
       не считается активным, хотя API продолжает звать его ACTIVE.
       «Сегодня» — с начала суток по часовому поясу
       рекламного кабинета, поэтому утром цифры маленькие и это нормально.
-      Дневной бюджет при CBO задан на кампании, тогда у групп он не показывается.</div>
+      Дневной бюджет при CBO задан на кампании, тогда у групп он не показывается.
+      Показы глушит и сам кабинет — непрошедший платёж или упёршийся лимит
+      затрат; в этом случае сверху висит красная плашка, а объявления такого
+      кабинета в «крутится сейчас» не считаются.</div>
   </div>
 </div>
 
@@ -182,11 +189,29 @@ function render(d) {
   document.getElementById('updated').textContent =
     'обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
 
+  // Остановленный кабинет не доставляет ничего, что бы ни было включено
+  // внутри. Об этом надо сказать первым, иначе всё ниже читается как
+  // «реклама работает».
+  const stopped = (d.accounts || []).filter(a => !a.ok || a.cap_reached);
+  document.getElementById('accountAlarm').innerHTML = stopped.length
+    ? '<div class="block"><div class="note alarm">' +
+      stopped.map(a => '<b>Кабинет «' + esc(a.name) + '» не показывает рекламу</b> — ' +
+        (a.cap_reached
+          ? 'достигнут лимит затрат ' + money(a.spend_cap) + '.'
+          : esc(a.status_text) + (a.reason ? ' (' + esc(a.reason) + ')' : '') + '.')
+      ).join('<br>') +
+      '<br>Пока это не исправлено, показов нет — что бы ни было включено ниже.' +
+      '</div></div>'
+    : '';
+
   const t = d.totals;
+  const blocked = t.ads_blocked || 0;
   document.getElementById('cards').innerHTML = [
     card('Крутится сейчас', fmtInt(t.ads) + ' ' + (t.ads === 1 ? 'объявление' : 'объяв.'),
-      plural(t.campaigns, ['кампания', 'кампании', 'кампаний']) + ' · ' +
-      plural(t.adsets, ['группа', 'группы', 'групп'])),
+      blocked
+        ? plural(blocked, ADS) + ' включено, но кабинет их не показывает'
+        : plural(t.campaigns, ['кампания', 'кампании', 'кампаний']) + ' · ' +
+          plural(t.adsets, ['группа', 'группы', 'групп'])),
     card('Бюджет в день', money(t.daily_budget), 'сумма дневных бюджетов'),
     card('Потрачено сегодня', money(t.today.spend),
       fmtInt(t.today.messages) + ' сообщений · ' + fmtInt(t.today.link_clicks) + ' кликов'),
@@ -238,10 +263,15 @@ function render(d) {
     } else if (c.lifetime_budget) {
       bits.push(money(c.lifetime_budget) + ' на весь срок');
     }
+    const live = c.account_ok === false
+      ? '<span class="paused" title="кабинет не показывает рекламу">⏸ </span>'
+      : '<span class="live"></span>';
     block.innerHTML =
-      '<div class="blockhead"><h2><span class="live"></span>' + esc(c.campaign_name) + '</h2>' +
+      '<div class="blockhead"><h2>' + live + esc(c.campaign_name) + '</h2>' +
       '<span class="sub">' + bits.join(' · ') + '</span>' +
-      '<span class="sub">' + plural(c.ads_count, ADS) + '</span></div>' +
+      '<span class="sub">' + plural(c.ads_count, ADS) +
+        (c.account_ok === false ? ' · <span class="paused">кабинет остановлен</span>' : '') +
+      '</span></div>' +
       '<div class="table-scroll"><table><thead><tr>' +
         '<th>Объявление</th><th>Сегодня</th><th>Показов<br>сегодня</th>' +
         '<th>Кликов<br>сегодня</th><th>Сообщ.<br>сегодня</th>' +

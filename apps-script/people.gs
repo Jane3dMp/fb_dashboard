@@ -1283,6 +1283,73 @@ function pplBudget_(v) {
   return Number(v || 0) / 100;
 }
 
+/** Что означает account_status рекламного кабинета. */
+const PPL_ACCOUNT_STATUS = {
+  1: 'работает', 2: 'отключён', 3: 'есть неоплаченная задолженность',
+  7: 'на проверке', 8: 'ждёт списания', 9: 'отсрочка платежа',
+  100: 'готовится к закрытию', 101: 'закрыт'
+};
+
+/** Почему кабинет отключили. */
+const PPL_DISABLE_REASON = {
+  1: 'нарушение рекламной политики', 2: 'проверка прав на контент',
+  3: 'проблема с платежом', 4: 'кабинет закрыт', 5: 'проверка AFC',
+  6: 'проверка бизнеса', 7: 'закрыт навсегда',
+  8: 'кабинет не использовался', 9: 'кабинет не использовался'
+};
+
+/**
+ * Состояние рекламных кабинетов.
+ *
+ * Без этого «Сейчас активно» врёт в самый неподходящий момент: когда не
+ * проходит платёж, Meta останавливает показы на уровне кабинета, а у
+ * объявлений остаётся статус ACTIVE и расписание в будущем. Страница
+ * бодро писала бы «крутится 21 объявление», когда не крутится ничего.
+ *
+ * Лимит затрат останавливает показы не хуже отключённого кабинета,
+ * поэтому считаем и его: spend_cap с amount_spent приходят в центах.
+ *
+ * Если Meta не ответила — считаем кабинет рабочим и помечаем unknown:
+ * ложная тревога хуже молчания, из-за неё перестанут верить и настоящей.
+ */
+function pplAccountStatuses_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('acct_status');
+  if (hit) return JSON.parse(hit);
+
+  const out = {};
+  pplAdAccounts_().forEach(function (acct) {
+    const info = pplGraph_(acct + '?fields=' + encodeURIComponent(
+      'name,currency,account_status,disable_reason,spend_cap,amount_spent'));
+    if (!info) { out[acct] = { id: acct, name: acct, ok: true, unknown: true }; return; }
+    const st = Number(info.account_status || 0);
+    const cap = pplBudget_(info.spend_cap);
+    const spent = pplBudget_(info.amount_spent);
+    const reason = Number(info.disable_reason || 0);
+    out[acct] = {
+      id: acct,
+      name: info.name || acct,
+      currency: info.currency || '',
+      status: st,
+      // «работает» — только явный ACTIVE: всё остальное так или иначе
+      // останавливает показы, и пусть страница скажет об этом прямо
+      ok: st === 1,
+      status_text: PPL_ACCOUNT_STATUS[st] || ('статус ' + st),
+      reason: PPL_DISABLE_REASON[reason] || '',
+      spend_cap: cap,
+      amount_spent: spent,
+      cap_reached: cap > 0 && spent >= cap
+    };
+  });
+  try { cache.put('acct_status', JSON.stringify(out), 300); } catch (e) {}
+  return out;
+}
+
+/** Кабинет доставляет рекламу? Остановленный не доставляет ничего. */
+function pplAccountDelivers_(acc) {
+  return !acc || (acc.ok && !acc.cap_reached);
+}
+
 /** Поля, по которым видно, доставляется объявление или уже нет. */
 const PPL_DELIVERY_FIELDS =
   'id,effective_status,campaign{stop_time},adset{end_time}';
@@ -1323,7 +1390,7 @@ function pplFetchAdsForDelivery_(extraFields, limit) {
     for (let page = 0; page < 6 && url; page++) {
       const body = pplGraph_(url);
       if (!body) { rows.partial = true; break; }
-      (body.data || []).forEach(function (r) { rows.push(r); });
+      (body.data || []).forEach(function (r) { r.account = acct; rows.push(r); });
       url = body.paging && body.paging.next ? body.paging.next : null;
     }
   });
@@ -1382,7 +1449,11 @@ function pplAdThumbs_(adIds) {
 function pplActiveAdIds_() {
   const out = {};
   const now = Date.now();
+  const accounts = pplAccountStatuses_();
   pplFetchAdsForDelivery_().forEach(function (a) {
+    // остановленный кабинет не доставляет ничего, кем бы объявление себя
+    // ни считало — иначе зелёная точка на «Днях» горит у мёртвых строк
+    if (!pplAccountDelivers_(accounts[a.account])) return;
     if (pplIsDelivering_(a, now)) out[a.id] = true;
   });
   return out;
@@ -1628,14 +1699,17 @@ function pplBuildActive(params) {
   const today = {}, week = {};   // ad_id → метрики
   const nowMs = Date.now();
   let finished = 0;           // отсеяно как «уже отработало»
+  let blocked = 0;            // включено, но кабинет не доставляет
+  const accounts = pplAccountStatuses_();
 
   pplAdAccounts_().forEach(function (acct) {
-    const info = pplGraph_(acct + '?fields=currency,name');
-    if (info && info.currency) {
-      if (!currency) currency = info.currency;
-      else if (currency !== info.currency) mixed = true;
+    const acc = accounts[acct] || {};
+    if (acc.currency) {
+      if (!currency) currency = acc.currency;
+      else if (currency !== acc.currency) mixed = true;
     }
-    const acctName = (info && info.name) || acct;
+    const acctName = acc.name || acct;
+    const delivers = pplAccountDelivers_(acc);
 
     // 1. что сейчас доставляется
     let url = acct + '/ads?effective_status=' + encodeURIComponent('["ACTIVE"]') +
@@ -1653,6 +1727,7 @@ function pplBuildActive(params) {
         // отработавшее своё объявление Meta продолжает звать ACTIVE —
         // см. pplIsDelivering_, без этой отсечки отчёт врёт в сотни раз
         if (!pplIsDelivering_(a, nowMs)) { finished++; return; }
+        if (!delivers) blocked++;
         const camp = a.campaign || {};
         const set = a.adset || {};
         const cid = camp.id || '(без кампании)';
@@ -1662,6 +1737,7 @@ function pplBuildActive(params) {
             campaign_name: camp.name || '(кампания без названия)',
             objective: camp.objective || '',
             account: acctName,
+            account_ok: delivers,
             daily_budget: pplBudget_(camp.daily_budget),
             lifetime_budget: pplBudget_(camp.lifetime_budget),
             adsets: {}
@@ -1729,7 +1805,7 @@ function pplBuildActive(params) {
     const setsBudget = adsets.reduce(function (t, s) { return t + s.daily_budget; }, 0);
     return {
       campaign_id: c.campaign_id, campaign_name: c.campaign_name,
-      objective: c.objective, account: c.account,
+      objective: c.objective, account: c.account, account_ok: c.account_ok,
       daily_budget: c.daily_budget || setsBudget,
       budget_on_campaign: c.daily_budget > 0,
       lifetime_budget: c.lifetime_budget,
@@ -1747,10 +1823,16 @@ function pplBuildActive(params) {
     mixed_currency: mixed,
     campaigns: out_campaigns,
     finished: finished,
+    accounts: Object.keys(accounts).map(function (k) { return accounts[k]; }),
     totals: {
       campaigns: out_campaigns.length,
       adsets: out_campaigns.reduce(function (t, c) { return t + c.adsets.length; }, 0),
-      ads: out_campaigns.reduce(function (t, c) { return t + c.ads_count; }, 0),
+      // «крутится» — только то, что кабинет реально доставляет; остальное
+      // считаем отдельно, иначе большая цифра на карточке будет враньём
+      ads: out_campaigns.reduce(function (t, c) {
+        return t + (c.account_ok ? c.ads_count : 0);
+      }, 0),
+      ads_blocked: blocked,
       daily_budget: out_campaigns.reduce(function (t, c) { return t + c.daily_budget; }, 0),
       today: pplSumMetrics_(out_campaigns.map(function (c) { return c.today; })),
       week: pplSumMetrics_(out_campaigns.map(function (c) { return c.week; }))

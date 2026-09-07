@@ -30,19 +30,22 @@ $currency = '';
 $mixed = false;
 $nowTs = time();
 $finished = 0;      // отсеяно как «уже отработало»
+$blocked = 0;       // включено, но кабинет не доставляет
+$accounts = meta_account_statuses();
 $campaigns = [];      // campaign_id => кампания с группами и объявлениями
 $adIds = [];
 $today = [];
 $week = [];
 
 foreach (cfg()['meta']['accounts'] as $accId => $accLabel) {
-    $info = meta_get('/act_' . $accId . '?fields=currency,name');
-    $cur = (string)($info['currency'] ?? '');
+    $acc = $accounts['act_' . $accId] ?? [];
+    $cur = (string)($acc['currency'] ?? '');
     if ($cur !== '') {
         if ($currency === '') $currency = $cur;
         elseif ($currency !== $cur) $mixed = true;
     }
-    $acctName = (string)($info['name'] ?? '') !== '' ? (string)$info['name'] : (string)$accLabel;
+    $acctName = (string)($acc['name'] ?? '') !== '' ? (string)$acc['name'] : (string)$accLabel;
+    $delivers = meta_account_delivers($acc ?: null);
 
     // 1. что сейчас доставляется
     $ads = meta_get_all('/act_' . $accId . '/ads?effective_status=' . urlencode('["ACTIVE"]')
@@ -54,6 +57,7 @@ foreach (cfg()['meta']['accounts'] as $accId => $accLabel) {
         // отработавшее своё объявление Meta продолжает звать ACTIVE —
         // см. meta_is_delivering, без этой отсечки отчёт врёт в сотни раз
         if (!meta_is_delivering($a, $nowTs)) { $finished++; continue; }
+        if (!$delivers) $blocked++;
         $camp = $a['campaign'] ?? [];
         $set = $a['adset'] ?? [];
         $cid = (string)($camp['id'] ?? '') !== '' ? (string)$camp['id'] : '(без кампании)';
@@ -63,6 +67,7 @@ foreach (cfg()['meta']['accounts'] as $accId => $accLabel) {
                 'campaign_name' => (string)($camp['name'] ?? '(кампания без названия)'),
                 'objective' => (string)($camp['objective'] ?? ''),
                 'account' => $acctName,
+                'account_ok' => $delivers,
                 'daily_budget' => meta_budget($camp['daily_budget'] ?? 0),
                 'lifetime_budget' => meta_budget($camp['lifetime_budget'] ?? 0),
                 'adsets' => [],
@@ -164,6 +169,7 @@ foreach ($campaigns as $c) {
         'campaign_name' => $c['campaign_name'],
         'objective' => $c['objective'],
         'account' => $c['account'],
+        'account_ok' => $c['account_ok'],
         'daily_budget' => $c['daily_budget'] > 0 ? $c['daily_budget'] : $setsBudget,
         'budget_on_campaign' => $c['daily_budget'] > 0,
         'lifetime_budget' => $c['lifetime_budget'],
@@ -182,10 +188,14 @@ $out = [
     'mixed_currency' => $mixed,
     'campaigns' => $outCampaigns,
     'finished' => $finished,
+    'accounts' => array_values($accounts),
     'totals' => [
         'campaigns' => count($outCampaigns),
         'adsets' => array_sum(array_map(fn($c) => count($c['adsets']), $outCampaigns)),
-        'ads' => array_sum(array_column($outCampaigns, 'ads_count')),
+        // «крутится» — только то, что кабинет реально доставляет
+        'ads' => array_sum(array_map(
+            fn($c) => $c['account_ok'] ? $c['ads_count'] : 0, $outCampaigns)),
+        'ads_blocked' => $blocked,
         'daily_budget' => array_sum(array_column($outCampaigns, 'daily_budget')),
         'today' => metrics_sum(array_column($outCampaigns, 'today')),
         'week' => metrics_sum(array_column($outCampaigns, 'week')),

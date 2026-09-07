@@ -844,6 +844,30 @@ test('статуса нет вовсе — не считаем крутящим�
   assert.strictEqual(isDelivering_({}, NOW), false);
 });
 
+/* ---------- доставляет ли кабинет ---------- */
+// Когда не проходит платёж, Meta глушит показы на уровне кабинета, а у
+// объявлений остаётся ACTIVE и расписание в будущем.
+
+const accountDelivers_ = sandbox.pplAccountDelivers_;
+
+console.log('\nСостояние рекламного кабинета');
+
+test('рабочий кабинет доставляет', () => {
+  assert.strictEqual(accountDelivers_({ ok: true, cap_reached: false }), true);
+});
+
+test('остановленный кабинет не доставляет', () => {
+  assert.strictEqual(accountDelivers_({ ok: false, cap_reached: false }), false);
+});
+
+test('упёрлись в лимит затрат — показов нет', () => {
+  assert.strictEqual(accountDelivers_({ ok: true, cap_reached: true }), false);
+});
+
+test('Meta не ответила — не поднимаем ложную тревогу', () => {
+  assert.strictEqual(accountDelivers_(undefined), true);
+});
+
 /* ---------- метрики Meta Ads ---------- */
 // Эти хелперы обслуживают и дни, и профили, и разбивку по объявлениям,
 // и «Сейчас активно» — ошибка в них разъедется сразу по четырём отчётам.
