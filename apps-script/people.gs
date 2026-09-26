@@ -108,6 +108,10 @@ function buildPeople(params) {
   const byPlatform = pplFetchSpendByPlatform_(since, until);
   const amoCurrency = pplFetchAmoCurrency_();
   const pipelineNames = pplFetchPipelines_();
+  // таблица «Кто написал в Direct» — бонус: не читается лист или не ответил
+  // amo, страница выйдет без неё, а не упадёт
+  let direct = [];
+  try { direct = pplDirectRows_(since, until); } catch (e) { Logger.log('Кто написал в Direct: ' + e); }
 
   const out = {
     view: 'people',
@@ -119,7 +123,7 @@ function buildPeople(params) {
     ads: ads,
     channel: pplChannelSummary_(leads, byPlatform, until, amoCurrency, pipelineNames),
     profiles: pplFetchSpendByProfile_(spendByAd),
-    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency, pipelineNames)
+    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency, pipelineNames, direct)
   };
 
   // 100 КБ — потолок значения в CacheService. Список людей может его
@@ -1062,7 +1066,7 @@ function pplPaysAssemble_(pages) {
  * а не платежа: вопрос «что принесли заявки этого периода». Поэтому на
  * коротком окне выручка всегда занижена — заявки не дозрели.
  */
-function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
+function pplAlfaRevenueCore_(leads, customers, pays, since, until, direct) {
   // телефон → клиенты с этим номером; контакт amo → клиенты с этой ссылкой
   const byPhone = {};
   const byContact = {};
@@ -1219,6 +1223,29 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     return String(l.utm_campaign || '').trim() || PPL_NO_COURSE;
   }).map(function (s) { return { course: s.key, leads: s.leads, with_alfa: s.with_alfa, paid: s.paid, revenue: s.revenue }; });
 
+  // Кто написал в Direct (строки из pplDirectRows_): тот же мост к Альфе,
+  // что и выше. Деньги — только у сделки, заведённой на эту переписку: у
+  // старой сделки действующего клиента оплаты идут за прежние занятия, и
+  // приписать их рекламе значило бы соврать.
+  const leadById = {};
+  leads.forEach(function (l) { if (l.lead_id) leadById[String(l.lead_id)] = l; });
+  const directOut = (direct || []).map(function (r) {
+    const out = {
+      ts: r.ts, account: r.account, name: r.name, course: r.course, text: r.text,
+      lead_id: r.lead_id, pipeline: r.pipeline, stage: r.stage, outcome: r.outcome,
+      reason: r.reason, client: r.client, with_alfa: false, revenue: 0
+    };
+    const l = leadById[String(r.lead_id || '')];
+    if (!l) return out;
+    const ids = customersOf(l);
+    out.with_alfa = ids.length > 0;
+    if (!r.client) {
+      const date = pplAnyIso_(l.created_at);
+      ids.forEach(function (cid) { out.revenue += paysSince(cid, date); });
+    }
+    return out;
+  });
+
   return {
     leads: igLeads.length,
     with_phone: withPhone,
@@ -1231,7 +1258,8 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     by_source: bySource,
     by_pipeline: byPipeline,
     by_course: byCourse,
-    paid_list: paidList.sort(function (a, b) { return b.revenue - a.revenue; })
+    paid_list: paidList.sort(function (a, b) { return b.revenue - a.revenue; }),
+    direct: directOut
   };
 }
 
@@ -1372,7 +1400,7 @@ function pplLivePayRows_() {
 }
 
 /** Выручка по заявкам из Instagram — по фактическим оплатам в AlfaCRM. */
-function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelineNames) {
+function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelineNames, direct) {
   const customers = pplRows_('RAW_alfa_customers');
   let leadRows = pplRows_('RAW_leads');
   let payRows = pplRows_('RAW_pays');
@@ -1380,7 +1408,7 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelin
   // недоступны, страница честно покажет утренний снимок, а не упадёт
   try { leadRows = pplMergeRows_(leadRows, pplLiveLeadRows_(pipelineNames), 'lead_id'); } catch (e) {}
   try { payRows = pplMergeRows_(payRows, pplLivePayRows_(), 'pay_id'); } catch (e) {}
-  const core = pplAlfaRevenueCore_(leadRows, customers, payRows, since, until);
+  const core = pplAlfaRevenueCore_(leadRows, customers, payRows, since, until, direct);
 
   const spend = spendByPlatform.instagram;
   const adCur = spendByPlatform.currency;
@@ -1405,7 +1433,9 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelin
     by_source: core.by_source,
     by_pipeline: core.by_pipeline,
     by_course: core.by_course,
-    paid_list: core.paid_list
+    paid_list: core.paid_list,
+    // кто написал в Direct; адрес amoCRM — для ссылок на сделки
+    direct: { amo: 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru', rows: core.direct }
   };
 }
 
@@ -2344,12 +2374,12 @@ function pplTagOneDirect_(msg, base, token) {
   return { status: plan.status, lead_id: lead.id };
 }
 
-/** Сделки amoCRM по id, пачками по 50. */
-function pplFetchLeads_(base, auth, ids) {
+/** Сделки amoCRM по id, пачками по 50; withArg — что приложить (with=…). */
+function pplFetchLeads_(base, auth, ids, withArg) {
   const leads = [];
   for (let i = 0; i < ids.length; i += 50) {
     const q = ids.slice(i, i + 50).map(function (id) { return 'filter[id][]=' + id; }).join('&');
-    const resp = UrlFetchApp.fetch(base + '/leads?limit=50&' + q, auth);
+    const resp = UrlFetchApp.fetch(base + '/leads?limit=50&' + (withArg ? 'with=' + withArg + '&' : '') + q, auth);
     if (resp.getResponseCode() === 204) continue;
     if (resp.getResponseCode() !== 200) throw new Error('amo leads HTTP ' + resp.getResponseCode());
     (((JSON.parse(resp.getContentText())._embedded) || {}).leads || []).forEach(function (l) { leads.push(l); });
@@ -2466,6 +2496,103 @@ function pplSetupDirectCourseTrigger() {
     if (t.getHandlerFunction() === 'pplTagDirectCourses') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('pplTagDirectCourses').timeBased().everyMinutes(10).create();
+}
+
+/*
+ * Кто написал в Direct — таблица страницы «Путь клиента»: по строке на
+ * человека из листа «Курсы из Direct» — когда, в какой аккаунт, что написал
+ * и чем кончилось в amoCRM (этап, причина отказа). Альфу и деньги добавляет
+ * ядро выручки (pplAlfaRevenueCore_) по тем же правилам, что разрез по курсам.
+ */
+
+/** Сколько символов первого сообщения отдаём странице: текст кнопки влезает. */
+const PPL_DIRECT_TEXT_MAX = 90;
+
+/**
+ * Строки листа за период (по дате сообщения) вместе с состоянием сделок.
+ * Сделки берём из amoCRM живьём, а не из RAW_leads: там нет причины
+ * отказа, а этап у сделок, тронутых сегодня, утренний.
+ */
+function pplDirectRows_(since, until) {
+  const rows = pplRows_(PPL_DIRECT_SHEET).filter(function (r) {
+    const st = String(r.status || '');
+    if (st === 'skip_service' || st === 'skip_empty') return false;
+    const t = new Date(r.ts);
+    if (isNaN(t.getTime())) return false;
+    const d = pplAnyIso_(t);
+    return d >= since && d <= until;
+  });
+  if (!rows.length) return [];
+
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
+  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') }, muteHttpExceptions: true };
+  const ids = [];
+  rows.forEach(function (r) {
+    const id = Number(r.lead_id);
+    if (id && ids.indexOf(id) === -1) ids.push(id);
+  });
+  const leadById = {};
+  let stages = {};
+  if (ids.length) {
+    pplFetchLeads_(base, auth, ids, 'loss_reason').forEach(function (l) { leadById[l.id] = l; });
+    stages = pplFetchPipelineStages_(base, auth);
+  }
+  return rows.map(function (r) { return pplDirectRow_(r, leadById[Number(r.lead_id)] || null, stages); });
+}
+
+/**
+ * Строка таблицы: сообщение + чем кончилась сделка. Чистая функция.
+ * lead — сделка из API amoCRM (with=loss_reason) или null; stages —
+ * { id воронки: { name, statuses: { id: название этапа } } }. client —
+ * переписка ушла в старую сделку действующего клиента (та же проверка, что
+ * в pplDirectPatch_): его оплаты рекламе не приписываем.
+ */
+function pplDirectRow_(r, lead, stages) {
+  const ts = new Date(r.ts);
+  const st = String(r.status || '');
+  const out = {
+    ts: ts.toISOString(),
+    account: pplShortBot_(r.bot),
+    name: String(r.name || r.username || '').trim(),
+    course: String(r.course || ''),
+    text: String(r.text || '').slice(0, PPL_DIRECT_TEXT_MAX),
+    lead_id: lead ? lead.id : '',
+    pipeline: '', stage: '', reason: '', client: false,
+    // сделки нет: пока статус пустой или retry, задача её ещё ищет
+    outcome: !st || st === 'retry' ? 'wait' : 'no_lead'
+  };
+  if (!lead) return out;
+  const pl = (stages || {})[lead.pipeline_id] || { name: '', statuses: {} };
+  const created = Number(lead.created_at || 0) * 1000;
+  out.pipeline = pl.name || '';
+  out.stage = pl.statuses[lead.status_id] || '';
+  out.outcome = lead.status_id === AMO_WON ? 'won' : lead.status_id === AMO_LOST ? 'lost' : 'open';
+  out.reason = (((((lead._embedded || {}).loss_reason) || [])[0]) || {}).name || '';
+  out.client = !(created >= ts.getTime() - PPL_DIRECT_BEFORE_MS && created <= ts.getTime() + PPL_DIRECT_AFTER_MS);
+  return out;
+}
+
+/** Короткое имя Instagram-аккаунта — без эмодзи и слоганов. Чистая функция. */
+function pplShortBot_(name) {
+  const s = String(name || '');
+  if (/coddy/i.test(s)) return 'CODDY';
+  if (/детал/i.test(s)) return 'Детали';
+  if (/детский клуб/i.test(s)) return 'Детский клуб';
+  if (/прознан|каникул|уикенд|weekend/i.test(s)) return 'Прознание';
+  return s.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().slice(0, 24);
+}
+
+/** Воронки amoCRM с этапами: { id: { name, statuses: { id: название } } }. */
+function pplFetchPipelineStages_(base, auth) {
+  const resp = UrlFetchApp.fetch(base + '/leads/pipelines', auth);
+  if (resp.getResponseCode() !== 200) return {};
+  const out = {};
+  (((JSON.parse(resp.getContentText())._embedded) || {}).pipelines || []).forEach(function (p) {
+    const st = {};
+    (((p._embedded || {}).statuses) || []).forEach(function (s) { st[s.id] = s.name; });
+    out[p.id] = { name: p.name, statuses: st };
+  });
+  return out;
 }
 
 /* ==================== Утилиты ==================== */

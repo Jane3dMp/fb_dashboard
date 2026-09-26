@@ -177,6 +177,9 @@ try {
         'by_pipeline' => $core['by_pipeline'],
         'by_course' => $core['by_course'],
         'paid_list' => $core['paid_list'],
+        // «Кто написал в Direct» строится из листа SendPulse, который читает
+        // только Apps Script; переедет вместе с приёмником вебхука
+        'direct' => ['amo' => '', 'rows' => []],
     ];
 
     // объявления: расход есть всегда; связка «клик → человек» появится,

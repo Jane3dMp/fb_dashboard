@@ -1092,6 +1092,85 @@ test('utm_campaign у новой сделки уже заполнен — не �
   assert.strictEqual(p.patch.custom_fields_values, undefined);
 });
 
+console.log('\nКто написал в Direct: таблица на странице');
+
+const directRow_ = sandbox.pplDirectRow_;
+const shortBot_ = sandbox.pplShortBot_;
+const stagesMap = {
+  7407214: { name: 'Регулярные занятия', statuses: { 81738178: 'Назначен ответственный', 142: 'Успешно реализовано', 143: 'Закрыто и не реализовано' } }
+};
+
+test('новая сделка: этап и воронка из справочника, не действующий клиент', () => {
+  const r = directRow_(
+    { ts: '2026-09-26T15:20:05Z', bot: 'CODDY®🚀 ШКОЛА ПРОГРАММИРОВАНИЯ', username: 'jane3dmp', name: 'Jane Mp', course: 'Minecraft', text: 'Minecraft: тест', status: 'ok' },
+    { id: 38872981, pipeline_id: 7407214, status_id: 81738178, created_at: unix('2026-09-26T15:20:01Z') },
+    stagesMap
+  );
+  assert.strictEqual(r.account, 'CODDY');
+  assert.strictEqual(r.outcome, 'open');
+  assert.strictEqual(r.pipeline, 'Регулярные занятия');
+  assert.strictEqual(r.stage, 'Назначен ответственный');
+  assert.strictEqual(r.client, false);
+  assert.strictEqual(r.lead_id, 38872981);
+});
+
+test('отказ — с причиной; старая сделка — действующий клиент', () => {
+  const lost = directRow_(
+    { ts: '2026-09-26T15:20:05Z', bot: 'x', name: 'A', status: 'ok' },
+    { id: 1, pipeline_id: 7407214, status_id: 143, created_at: unix('2026-09-26T15:20:01Z'), _embedded: { loss_reason: [{ id: 5, name: 'Дорого' }] } },
+    stagesMap
+  );
+  assert.strictEqual(lost.outcome, 'lost');
+  assert.strictEqual(lost.reason, 'Дорого');
+  const client = directRow_(
+    { ts: '2026-09-26T15:30:59Z', bot: 'ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ', username: 'vaskovskaya_oksana', name: '', status: 'old_lead' },
+    { id: 37034381, pipeline_id: 10365698, status_id: 81959114, created_at: unix('2026-05-14T06:18:00Z') },
+    stagesMap
+  );
+  assert.strictEqual(client.client, true);
+  assert.strictEqual(client.account, 'Детский клуб');
+  assert.strictEqual(client.name, 'vaskovskaya_oksana', 'без имени профиля показываем ник');
+  assert.strictEqual(client.stage, '', 'воронки нет в справочнике — этап пустой, не падаем');
+});
+
+test('сделки нет: пока retry — ищем, после попыток — не нашли', () => {
+  assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: 'retry' }, null, {}).outcome, 'wait');
+  assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: '' }, null, {}).outcome, 'wait');
+  assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: 'no_contact' }, null, {}).outcome, 'no_lead');
+});
+
+test('короткие имена аккаунтов', () => {
+  assert.strictEqual(shortBot_('CODDY®🚀 ШКОЛА ПРОГРАММИРОВАНИЯ  И ДИЗАЙНА 🚀 МОГИЛЁВ'), 'CODDY');
+  assert.strictEqual(shortBot_('ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ'), 'Детский клуб');
+  assert.strictEqual(shortBot_('Детали: праздники'), 'Детали');
+  assert.strictEqual(shortBot_('🎈 Новый аккаунт 🎈'), 'Новый аккаунт');
+});
+
+test('деньги — только у новой сделки, у действующего клиента их не приписываем', () => {
+  const r = revenueCore_(
+    [igLead({ lead_id: 1, created_at: '2026-09-26' }),
+      igLead({ lead_id: 2, created_at: '2026-05-14', phone_e164: '+375291111111' })],
+    [customer(101, '+375291102796'), customer(102, '+375291111111')],
+    [pay(101, '27.09.2026', 300, 'p1'), pay(102, '27.09.2026', 90, 'p2')],
+    '2026-09-01', '2026-09-30',
+    [{ ts: '2026-09-26T15:20:05.000Z', lead_id: 1, client: false, outcome: 'won' },
+      { ts: '2026-09-26T15:30:59.000Z', lead_id: 2, client: true, outcome: 'open' },
+      { ts: '2026-09-26T16:00:00.000Z', lead_id: '', client: false, outcome: 'wait' }]
+  );
+  assert.strictEqual(r.direct.length, 3);
+  assert.strictEqual(r.direct[0].with_alfa, true);
+  assert.strictEqual(r.direct[0].revenue, 300);
+  assert.strictEqual(r.direct[1].with_alfa, true);
+  assert.strictEqual(r.direct[1].revenue, 0);
+  assert.strictEqual(r.direct[2].with_alfa, false);
+});
+
+test('без строк Direct ядро отдаёт пустой список, остальное не меняется', () => {
+  const r = revenueCore_([igLead({})], [], [], '2026-07-01', '2026-07-31');
+  assert.strictEqual(r.direct.length, 0);
+  assert.strictEqual(r.leads, 1);
+});
+
 test('значение поля сделки читается по id, пустое — пустая строка', () => {
   const lead = { custom_fields_values: [{ field_id: 1648719, values: [{ value: ' Глина ' }] }] };
   assert.strictEqual(leadField_(lead, 1648719), 'Глина');
