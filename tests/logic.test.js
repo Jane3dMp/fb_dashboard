@@ -1348,7 +1348,7 @@ test('HTML-страница ошибки Альфы ужимается до за
 
 /* ---------- webhook.gs: словарь курсов ---------- */
 
-const hookBox ={ console, LockService: {}, SpreadsheetApp: {}, PropertiesService: {}, ContentService: {} };
+const hookBox = { console, LockService: {}, SpreadsheetApp: {}, PropertiesService: {}, ContentService: {} };
 vm.createContext(hookBox);
 vm.runInContext(
   fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'webhook.gs'), 'utf8'),
@@ -1410,6 +1410,71 @@ test('текст сообщения SendPulse: из channel_data, иначе las
   assert.strictEqual(spText_({ info: { message: { channel_data: { message: { text: 'Minecraft: цена?' } } } } }), 'Minecraft: цена?');
   assert.strictEqual(spText_({ contact: { last_message: 'Глина: пробное?' } }), 'Глина: пробное?');
   assert.strictEqual(spText_({}), '');
+});
+
+/* ---------- etl_amo.gs: повтор запросов к amoCRM ---------- */
+
+// UrlFetch по сценарию: Error — сетевой сбой, число — код ответа
+let amoScript = [], amoCalls = 0, amoSleeps = [];
+const amoBox = {
+  console,
+  Logger: { log: () => {} },
+  Utilities: { sleep: (ms) => { amoSleeps.push(ms); } },
+  UrlFetchApp: {
+    fetch: () => {
+      amoCalls++;
+      const step = amoScript.shift();
+      if (step instanceof Error) throw step;
+      const body = step === 200 ? '{"_embedded":{"leads":[{"id":1}]}}' : 'ответ ' + step;
+      return { getResponseCode: () => step, getContentText: () => body };
+    }
+  },
+  PropertiesService: {}, SpreadsheetApp: {}
+};
+vm.createContext(amoBox);
+vm.runInContext(
+  fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'etl_amo.gs'), 'utf8'),
+  amoBox
+);
+const amoCfg = { subdomain: 'demo', token: 't' };
+function amoTry(script) {
+  amoScript = script.slice(); amoCalls = 0; amoSleeps = [];
+  try { return { data: amoBox.amoFetch_('/leads', amoCfg) }; } catch (e) { return { error: String(e.message || e) }; }
+}
+
+console.log('\nВыгрузка amoCRM: повтор при сбое');
+
+test('сетевой сбой повторяется, вторая попытка проходит', () => {
+  const out = amoTry([new Error('Address unavailable: https://demo.amocrm.ru/api/v4/leads'), 200]);
+  assert.strictEqual(out.data._embedded.leads[0].id, 1);
+  assert.strictEqual(amoCalls, 2);
+  assert.strictEqual(JSON.stringify(amoSleeps), '[5000]');
+});
+
+test('три сбоя подряд — прогон падает с исходной ошибкой', () => {
+  const down = new Error('Address unavailable: https://demo.amocrm.ru/api/v4/leads');
+  const out = amoTry([down, down, down]);
+  assert.ok(/Address unavailable/.test(out.error), out.error);
+  assert.strictEqual(amoCalls, 3);
+  assert.strictEqual(JSON.stringify(amoSleeps), '[5000,10000]');
+});
+
+test('5xx и 429 повторяются, дальше ответ разбирается как обычно', () => {
+  assert.strictEqual(amoTry([502, 429, 200]).data._embedded.leads[0].id, 1);
+  assert.strictEqual(amoCalls, 3);
+  const out = amoTry([503, 503, 503]);
+  assert.ok(/amoCRM 503/.test(out.error), out.error);
+  assert.strictEqual(amoCalls, 3, 'больше трёх попыток не делаем');
+});
+
+test('401, 400 и 204 не повторяются — поведение прежнее', () => {
+  assert.ok(/токен недействителен/.test(amoTry([401]).error));
+  assert.strictEqual(amoCalls, 1);
+  assert.ok(/amoCRM 400/.test(amoTry([400]).error));
+  assert.strictEqual(amoCalls, 1);
+  assert.strictEqual(amoTry([204]).data, null);
+  assert.strictEqual(amoCalls, 1);
+  assert.strictEqual(amoSleeps.length, 0);
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

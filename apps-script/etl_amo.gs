@@ -38,7 +38,7 @@ function amoProps_() {
 
 function amoFetch_(path, cfg) {
   var url = 'https://' + cfg.subdomain + '.amocrm.ru/api/v4' + path;
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = amoFetchRetry_(url, {
     method: 'get',
     headers: { Authorization: 'Bearer ' + cfg.token },
     muteHttpExceptions: true
@@ -48,6 +48,33 @@ function amoFetch_(path, cfg) {
   if (code === 401) throw new Error('amoCRM 401: токен недействителен');
   if (code >= 400) throw new Error('amoCRM ' + code + ': ' + resp.getContentText().slice(0, 300));
   return JSON.parse(resp.getContentText());
+}
+
+/**
+ * UrlFetch к amoCRM с повтором. Три утра из семи (21, 22 и 26.09.2026)
+ * прогон падал на середине выгрузки с «Address unavailable» — UrlFetch не
+ * достучался до amoCRM, — и RAW_leads оставался вчерашним. Сетевой сбой,
+ * 429 и 5xx пробуем ещё дважды, через 5 и 10 секунд; остальные ответы
+ * отдаём как есть — их разбирает amoFetch_.
+ */
+function amoFetchRetry_(url, opts) {
+  for (var attempt = 1; ; attempt++) {
+    var resp = null, err = null;
+    try {
+      resp = UrlFetchApp.fetch(url, opts);
+    } catch (e) {
+      err = e;
+    }
+    var code = resp ? resp.getResponseCode() : 0;
+    if (!err && code !== 429 && code < 500) return resp;
+    if (attempt >= 3) {
+      if (err) throw err;
+      return resp;
+    }
+    Logger.log('amoCRM: ' + (err ? String(err).slice(0, 120) : 'HTTP ' + code) +
+      ' — повтор через ' + attempt * 5 + ' с');
+    Utilities.sleep(attempt * 5000);
+  }
 }
 
 /** Справочник воронок и статусов */
