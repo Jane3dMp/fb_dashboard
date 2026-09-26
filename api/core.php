@@ -164,6 +164,12 @@ function alfa_revenue_core(array $leads, array $customers, array $pays, string $
         fn($s) => ['pipeline' => $s['key'], 'leads' => $s['leads'], 'with_alfa' => $s['with_alfa'], 'paid' => $s['paid'], 'revenue' => $s['revenue']],
         $slice($igLeads, fn($l) => trim((string)($l['pipeline'] ?? '')) !== '' ? trim((string)$l['pipeline']) : '(без воронки)')
     );
+    // курс из первого сообщения в Direct (= byCourse в people.gs): его
+    // кладёт в utm_campaign задача pplTagDirectCourses
+    $byCourse = array_map(
+        fn($s) => ['course' => $s['key'], 'leads' => $s['leads'], 'with_alfa' => $s['with_alfa'], 'paid' => $s['paid'], 'revenue' => $s['revenue']],
+        $slice($igLeads, fn($l) => trim((string)($l['utm_campaign'] ?? '')) !== '' ? trim((string)$l['utm_campaign']) : '(курс не определён)')
+    );
 
     $brands = array_values($byBrand);
     usort($brands, fn($a, $b) => ($b['revenue'] <=> $a['revenue']) ?: ($b['leads'] <=> $a['leads']));
@@ -179,6 +185,7 @@ function alfa_revenue_core(array $leads, array $customers, array $pays, string $
         'brands' => $brands,
         'by_source' => $bySource,
         'by_pipeline' => $byPipeline,
+        'by_course' => $byCourse,
         'paid_list' => $paidList,
     ];
 }

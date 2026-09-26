@@ -218,6 +218,20 @@
       </div>
     </div>
 
+    <div class="block" id="coursesBlock" style="display:none">
+      <h2>Курс из первого сообщения в Direct</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Курс</th><th>Заявок</th><th>Связаны с Альфой</th>
+            <th>Заплатили</th><th>Выручка</th>
+          </tr></thead>
+          <tbody id="coursesBody"></tbody>
+        </table>
+      </div>
+      <div class="note" id="coursesNote"></div>
+    </div>
+
     <div class="block">
       <h2>Расход по Instagram-профилям</h2>
       <div class="table-scroll">
@@ -381,6 +395,7 @@ function render() {
   renderChannel(d.channel, d.revenue);
   renderRevenue(d.revenue, d.channel);
   renderPipelines(d.channel.pipelines || [], d.revenue);
+  renderCourses(d.revenue);
   renderProfiles(d.profiles || []);
   renderMatchNote(d);
 
@@ -568,6 +583,38 @@ function renderPipelines(rows, r) {
       <td class="${rev && rev.revenue ? '' : 'zero'}">${rev && rev.revenue ? amoMoney(rev.revenue) : '—'}</td>`;
     body.appendChild(tr);
   });
+}
+
+/**
+ * Заявки из Instagram по курсу, названному в первом сообщении. Курс
+ * определяет приёмник вебхука SendPulse, метку в сделку ставит
+ * pplTagDirectCourses. Старый бэкенд by_course не отдаёт — блок скрыт.
+ */
+function renderCourses(r) {
+  const block = document.getElementById('coursesBlock');
+  const rows = (r && r.by_course) || null;
+  if (!rows) { block.style.display = 'none'; return; }
+  block.style.display = '';
+  const body = document.getElementById('coursesBody');
+  body.innerHTML = '';
+  let known = 0, total = 0;
+  rows.forEach(c => {
+    total += c.leads;
+    if (c.course !== '(курс не определён)') known += c.leads;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${c.course}</td>
+      <td>${fmtInt(c.leads)}</td>
+      <td class="${c.with_alfa ? '' : 'zero'}">${fmtInt(c.with_alfa)}</td>
+      <td class="${c.paid ? '' : 'zero'}">${fmtInt(c.paid)}</td>
+      <td class="${c.revenue ? '' : 'zero'}">${c.revenue ? amoMoney(c.revenue) : '—'}</td>`;
+    body.appendChild(tr);
+  });
+  document.getElementById('coursesNote').innerHTML =
+    `Курс определён у <b>${fmtInt(known)}</b> из ${fmtInt(total)} заявок из Instagram.
+     Он берётся из первого сообщения человека — в рекламе это текст нажатой
+     кнопки («Лепка из природной глины: …»). «Курс не определён» — человек
+     написал своими словами без названия курса; такие заявки размечает менеджер.`;
 }
 
 /**

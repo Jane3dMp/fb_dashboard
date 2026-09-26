@@ -986,6 +986,14 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
     return String(l.pipeline || '').trim() || '(без воронки)';
   }).map(function (s) { return { pipeline: s.key, leads: s.leads, with_alfa: s.with_alfa, paid: s.paid, revenue: s.revenue }; });
 
+  // Курс из первого сообщения в Direct: его кладёт в utm_campaign
+  // pplTagDirectCourses. У заявок из Instagram других UTM не бывает —
+  // они приходят из переписки, а не с сайта, так что поле не спорит
+  // с настоящими метками.
+  const byCourse = slice(igLeads, function (l) {
+    return String(l.utm_campaign || '').trim() || PPL_NO_COURSE;
+  }).map(function (s) { return { course: s.key, leads: s.leads, with_alfa: s.with_alfa, paid: s.paid, revenue: s.revenue }; });
+
   return {
     leads: igLeads.length,
     with_phone: withPhone,
@@ -997,6 +1005,7 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until) {
       .sort(function (a, b) { return b.revenue - a.revenue || b.leads - a.leads; }),
     by_source: bySource,
     by_pipeline: byPipeline,
+    by_course: byCourse,
     paid_list: paidList.sort(function (a, b) { return b.revenue - a.revenue; })
   };
 }
@@ -1025,6 +1034,12 @@ function pplMergeRows_(base, live, key) {
 /** Поля amoCRM, которые нужны живой дельте (те же id, что в etl_amo.gs). */
 const PPL_AMO_PHONE_FIELD = 1648707;
 const PPL_AMO_ALFA_FIELD = 1652617;
+/** Поле сделки utm_campaign: сюда же pplTagDirectCourses пишет курс. */
+const PPL_AMO_UTM_CAMPAIGN_FIELD = 1648719;
+/** Поле сделки utm_content: сюда pplTagDirectCourses пишет ID объявления. */
+const PPL_AMO_UTM_CONTENT_FIELD = 1648715;
+/** Строка разреза для заявок, у которых курс из переписки не определён. */
+const PPL_NO_COURSE = '(курс не определён)';
 
 /**
  * Живая дельта заявок: сделки amoCRM, изменённые сегодня. Листы снимаются
@@ -1081,12 +1096,22 @@ function pplLiveLeadRows_(pipelineNames) {
       created_at: new Date(l.created_at * 1000).toISOString(),
       phone_e164: cd.phone || '',
       source: pplLeadSource_(l),
+      // без поля строка дельты затёрла бы курс из утреннего листа
+      utm_campaign: pplLeadFieldValue_(l, PPL_AMO_UTM_CAMPAIGN_FIELD),
       pipeline: (pipelineNames && pipelineNames[l.pipeline_id]) || String(l.pipeline_id || ''),
       alfa_url: cd.alfa || '',
       lead_id: l.id,
       contact_id: cid
     };
   });
+}
+
+/** Первое значение пользовательского поля сделки amoCRM строкой. */
+function pplLeadFieldValue_(lead, fieldId) {
+  const f = ((lead && lead.custom_fields_values) || []).filter(function (x) {
+    return x.field_id === fieldId;
+  })[0];
+  return (f && f.values && f.values[0] && String(f.values[0].value || '').trim()) || '';
 }
 
 /**
@@ -1154,6 +1179,7 @@ function pplRevenueFromAlfa_(since, until, spendByPlatform, amoCurrency, pipelin
     brands: core.brands,
     by_source: core.by_source,
     by_pipeline: core.by_pipeline,
+    by_course: core.by_course,
     paid_list: core.paid_list
   };
 }
@@ -1956,6 +1982,195 @@ function pplAggregateByAd_(people, spendByAd) {
       roas: s.spend ? a.revenue / s.spend : null
     };
   }).sort(function (x, y) { return y.spend - x.spend; });
+}
+
+/* ============ 4b. Курс из первого сообщения в Direct → метка в amoCRM ============ */
+
+/*
+ * Лист «Курсы из Direct» заполняет webhook.gs по вебхуку SendPulse: кто
+ * написал (ник и имя в Instagram), когда и какой курс назван в первом
+ * сообщении, а если переписка пришла из рекламы — ещё и ID объявления.
+ * Здесь находим сделку этого человека в amoCRM и кладём курс в поле
+ * utm_campaign (плюс тег «курс: …»), а ID объявления — в utm_content.
+ * Дальше это едет в дашборд обычной выгрузкой RAW_leads и живой дельтой —
+ * отдельного пути не нужно.
+ *
+ * Почему не сразу в вебхуке: сделку amoCRM создаёт своя интеграция с
+ * Instagram, и к моменту вебхука SendPulse её может ещё не быть. Поэтому
+ * строки ждут в листе, а задача раз в 10 минут пробует снова; через
+ * PPL_DIRECT_MAX_TRIES попыток строка закрывается с причиной.
+ *
+ * Чужую работу не трогаем: если utm_campaign у сделки уже заполнен,
+ * значение остаётся, добавляется только тег.
+ */
+const PPL_DIRECT_SHEET = 'Курсы из Direct';
+const PPL_DIRECT_MAX_TRIES = 12;          // 12 × 10 минут = 2 часа
+const PPL_DIRECT_BATCH = 40;              // строк за запуск — укладываемся в лимит времени
+const PPL_DIRECT_BEFORE_MS = 30 * 60000;  // сделка могла появиться чуть раньше вебхука
+const PPL_DIRECT_AFTER_MS = 3 * 3600000;  // …или заметно позже
+
+/**
+ * Ставит курс из Direct в сделки amoCRM. Запускается триггером раз в
+ * 10 минут (pplSetupDirectCourseTrigger); можно и руками из редактора.
+ */
+function pplTagDirectCourses() {
+  const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
+  if (!sh || sh.getLastRow() < 2) return;
+  const values = sh.getDataRange().getValues();
+  const head = values[0].map(String);
+  const col = {};
+  head.forEach(function (h, i) { col[h] = i; });
+
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
+  const token = pplProp_('AMO_TOKEN');
+  let done = 0;
+  for (let i = 1; i < values.length && done < PPL_DIRECT_BATCH; i++) {
+    const r = values[i];
+    const status = String(r[col.status] || '');
+    if (status && status !== 'retry') continue;
+    done++;
+    const tries = Number(r[col.tries] || 0) + 1;
+    const msg = {
+      ts: pplAnyIso_(r[col.ts]) ? new Date(r[col.ts]).toISOString() : '',
+      service: String(r[col.service] || ''),
+      username: String(r[col.username] || ''),
+      name: String(r[col.name] || ''),
+      course: String(r[col.course] || ''),
+      ad_id: col.ad_id === undefined ? '' : String(r[col.ad_id] || '')
+    };
+    let res;
+    try {
+      res = pplTagOneDirect_(msg, base, token);
+    } catch (e) {
+      res = { status: 'retry', note: String(e).slice(0, 200) };
+    }
+    let st = res.status;
+    // не нашли — возможно, сделка ещё не создана; пробуем, пока есть попытки
+    if (st === 'no_contact' || st === 'no_lead' || st === 'retry') {
+      st = tries < PPL_DIRECT_MAX_TRIES ? 'retry' : st;
+    }
+    sh.getRange(i + 1, col.status + 1, 1, 3).setValues([[st, res.lead_id || '', tries]]);
+    if (res.note) Logger.log('Курсы из Direct, строка ' + (i + 1) + ': ' + res.note);
+  }
+}
+
+/** Одна строка: найти сделку и поставить метку. */
+function pplTagOneDirect_(msg, base, token) {
+  if (msg.service && msg.service !== 'instagram') return { status: 'skip_service' };
+  if ((!msg.course && !msg.ad_id) || !msg.ts) return { status: 'skip_empty' };
+  const auth = { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
+
+  // amoCRM называет контакт из Instagram его ником или именем профиля
+  const contacts = [];
+  const seen = {};
+  [msg.username, msg.name].forEach(function (q) {
+    q = String(q || '').replace(/^@/, '').trim();
+    if (!q) return;
+    const resp = UrlFetchApp.fetch(base + '/contacts?with=leads&limit=10&query=' + encodeURIComponent(q), auth);
+    if (resp.getResponseCode() === 204) return;
+    if (resp.getResponseCode() !== 200) throw new Error('amo contacts HTTP ' + resp.getResponseCode());
+    (((JSON.parse(resp.getContentText())._embedded) || {}).contacts || []).forEach(function (c) {
+      if (!seen[c.id]) { seen[c.id] = true; contacts.push(c); }
+    });
+  });
+
+  const mine = pplDirectContacts_(msg, contacts);
+  if (!mine.length) return { status: 'no_contact' };
+  const leadIds = [];
+  mine.forEach(function (c) {
+    (((c._embedded || {}).leads) || []).forEach(function (l) {
+      if (leadIds.indexOf(l.id) === -1) leadIds.push(l.id);
+    });
+  });
+  if (!leadIds.length) return { status: 'no_lead' };
+
+  const leads = [];
+  for (let i = 0; i < leadIds.length; i += 50) {
+    const q = leadIds.slice(i, i + 50).map(function (id) { return 'filter[id][]=' + id; }).join('&');
+    const resp = UrlFetchApp.fetch(base + '/leads?limit=50&' + q, auth);
+    if (resp.getResponseCode() !== 200) throw new Error('amo leads HTTP ' + resp.getResponseCode());
+    (((JSON.parse(resp.getContentText())._embedded) || {}).leads || []).forEach(function (l) { leads.push(l); });
+  }
+  const lead = pplPickDirectLead_(msg.ts, leads);
+  if (!lead) return { status: 'no_lead' };
+
+  // курс → utm_campaign, объявление → utm_content; заполненное не трогаем
+  const fields = [];
+  if (msg.course && !pplLeadFieldValue_(lead, PPL_AMO_UTM_CAMPAIGN_FIELD)) {
+    fields.push({ field_id: PPL_AMO_UTM_CAMPAIGN_FIELD, values: [{ value: msg.course }] });
+  }
+  if (msg.ad_id && !pplLeadFieldValue_(lead, PPL_AMO_UTM_CONTENT_FIELD)) {
+    fields.push({ field_id: PPL_AMO_UTM_CONTENT_FIELD, values: [{ value: msg.ad_id }] });
+  }
+  const hasValue = !fields.length;
+  const patch = { id: lead.id };
+  if (fields.length) patch.custom_fields_values = fields;
+  // tags_to_add — на верхнем уровне сделки: добавляет, не затирая чужие теги
+  if (msg.course) patch.tags_to_add = [{ name: 'курс: ' + msg.course }];
+  if (!fields.length && !patch.tags_to_add) return { status: 'has_value', lead_id: lead.id };
+  const resp = UrlFetchApp.fetch(base + '/leads', {
+    method: 'patch',
+    contentType: 'application/json',
+    payload: JSON.stringify([patch]),
+    headers: auth.headers,
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) {
+    return { status: 'retry', lead_id: lead.id, note: 'PATCH HTTP ' + resp.getResponseCode() + ' ' + resp.getContentText().slice(0, 150) };
+  }
+  return { status: hasValue ? 'has_value' : 'ok', lead_id: lead.id };
+}
+
+/**
+ * Контакты amoCRM, которые действительно этот человек: имя контакта
+ * совпадает с ником или именем в Instagram (без учёта регистра и «@»).
+ * Поиск amoCRM ищет и по подстроке, и по телефонам — брать первого
+ * попавшегося нельзя. Чистая функция.
+ */
+function pplDirectContacts_(msg, contacts) {
+  const norm = function (s) { return String(s || '').replace(/^@/, '').trim().toLowerCase(); };
+  const want = [norm(msg.username), norm(msg.name)].filter(Boolean);
+  return (contacts || []).filter(function (c) { return want.indexOf(norm(c.name)) !== -1; });
+}
+
+/**
+ * Какая сделка — та самая. Лучше всего сделка, созданная около момента
+ * сообщения (окно BEFORE/AFTER): её amoCRM и открыла на эту переписку.
+ * Если такой нет, человек мог написать в уже открытую сделку — тогда
+ * берём открытую, которую тронули не раньше чем за 15 минут до сообщения.
+ * Закрытые старые сделки не трогаем. Чистая функция.
+ */
+function pplPickDirectLead_(tsIso, leads) {
+  const t = new Date(tsIso).getTime();
+  if (!t) return null;
+  let best = null, bestGap = Infinity;
+  (leads || []).forEach(function (l) {
+    const created = Number(l.created_at || 0) * 1000;
+    if (created < t - PPL_DIRECT_BEFORE_MS || created > t + PPL_DIRECT_AFTER_MS) return;
+    const gap = Math.abs(created - t);
+    if (gap < bestGap) { best = l; bestGap = gap; }
+  });
+  if (best) return best;
+  let open = null;
+  (leads || []).forEach(function (l) {
+    if (l.status_id === AMO_WON || l.status_id === AMO_LOST) return;
+    const updated = Number(l.updated_at || 0) * 1000;
+    if (updated < t - 15 * 60000) return;
+    if (!open || updated > Number(open.updated_at || 0) * 1000) open = l;
+  });
+  return open;
+}
+
+/**
+ * Ставит триггер pplTagDirectCourses раз в 10 минут. Повторный запуск
+ * безопасен: прежний триггер этой функции сносится. Ежедневные триггеры
+ * (pplSetupDailyTriggers) не трогает.
+ */
+function pplSetupDirectCourseTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pplTagDirectCourses') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pplTagDirectCourses').timeBased().everyMinutes(10).create();
 }
 
 /* ==================== Утилиты ==================== */

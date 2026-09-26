@@ -937,5 +937,144 @@ test('бюджет Meta приходит в центах строкой', () => 
   assert.strictEqual(budget_(undefined), 0);
 });
 
+/* ================= курс из первого сообщения в Direct ================= */
+
+console.log('\nКурс из Direct: разрез выручки');
+
+test('разрез по курсам: метка из utm_campaign, без метки — «курс не определён»', () => {
+  const r = revenueCore_(
+    [igLead({ utm_campaign: 'Minecraft' }), igLead({ phone_e164: '', utm_campaign: '' })],
+    [customer(101, '+375291102796')],
+    [pay(101, '15.07.2026', 250, 'p1')],
+    '2026-07-01', '2026-07-31'
+  );
+  const mc = r.by_course.find(c => c.course === 'Minecraft');
+  const none = r.by_course.find(c => c.course === '(курс не определён)');
+  assert.strictEqual(mc.leads, 1);
+  assert.strictEqual(mc.paid, 1);
+  assert.strictEqual(mc.revenue, 250);
+  assert.strictEqual(none.leads, 1);
+  assert.strictEqual(none.revenue, 0);
+});
+
+test('разрез по курсам не берёт заявки не из Instagram', () => {
+  const r = revenueCore_(
+    [igLead({ source: 'Сайт', utm_campaign: 'autumn_sale' })],
+    [], [], '2026-07-01', '2026-07-31'
+  );
+  assert.strictEqual(r.by_course.length, 0, 'настоящие UTM сайта не смешиваются с курсами');
+});
+
+console.log('\nКурс из Direct: какая сделка та самая');
+
+const pickLead_ = sandbox.pplPickDirectLead_;
+const directContacts_ = sandbox.pplDirectContacts_;
+const leadField_ = sandbox.pplLeadFieldValue_;
+const unix = (iso) => Math.floor(new Date(iso).getTime() / 1000);
+
+test('берёт сделку, созданную около момента сообщения', () => {
+  const l = pickLead_('2026-09-26T10:29:00Z', [
+    { id: 1, created_at: unix('2026-08-01T10:00:00Z'), updated_at: unix('2026-08-02T10:00:00Z'), status_id: 142 },
+    { id: 2, created_at: unix('2026-09-26T10:30:00Z'), updated_at: unix('2026-09-26T10:31:00Z'), status_id: 1 }
+  ]);
+  assert.strictEqual(l.id, 2);
+});
+
+test('новой сделки нет — берёт открытую, которую тронули на этом сообщении', () => {
+  const l = pickLead_('2026-09-26T10:29:00Z', [
+    { id: 1, created_at: unix('2026-08-01T10:00:00Z'), updated_at: unix('2026-09-26T10:29:30Z'), status_id: 5 }
+  ]);
+  assert.strictEqual(l.id, 1);
+});
+
+test('старые и закрытые сделки не трогает', () => {
+  const l = pickLead_('2026-09-26T10:29:00Z', [
+    { id: 1, created_at: unix('2026-08-01T10:00:00Z'), updated_at: unix('2026-09-26T10:29:30Z'), status_id: 143 },
+    { id: 2, created_at: unix('2026-08-01T10:00:00Z'), updated_at: unix('2026-09-01T10:00:00Z'), status_id: 5 }
+  ]);
+  assert.strictEqual(l, null);
+});
+
+test('контакт берётся только при совпадении имени с ником или именем', () => {
+  const out = directContacts_(
+    { username: 'AnnaKrutenko', name: 'Анна' },
+    [{ id: 1, name: 'annakrutenko' }, { id: 2, name: 'Анна Иванова' }, { id: 3, name: '@AnnaKrutenko' }]
+  );
+  assert.deepStrictEqual(out.map(c => c.id), [1, 3]);
+});
+
+test('значение поля сделки читается по id, пустое — пустая строка', () => {
+  const lead = { custom_fields_values: [{ field_id: 1648719, values: [{ value: ' Глина ' }] }] };
+  assert.strictEqual(leadField_(lead, 1648719), 'Глина');
+  assert.strictEqual(leadField_(lead, 1), '');
+  assert.strictEqual(leadField_({}, 1648719), '');
+});
+
+/* ---------- webhook.gs: словарь курсов ---------- */
+
+const hookBox = { console, LockService: {}, SpreadsheetApp: {}, PropertiesService: {}, ContentService: {} };
+vm.createContext(hookBox);
+vm.runInContext(
+  fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'webhook.gs'), 'utf8'),
+  hookBox
+);
+const course_ = hookBox.spCourse_;
+const prefix_ = hookBox.spPrefix_;
+const spText_ = hookBox.spText_;
+
+console.log('\nКурс из Direct: словарь');
+
+test('кнопка из рекламы: курс в начале', () => {
+  assert.strictEqual(course_('Лепка из природной глины: как записаться на пробное?'), 'Глина');
+  assert.strictEqual(course_('Minecraft: сколько стоит курс?'), 'Minecraft');
+  assert.strictEqual(course_('майнкрафт для 8 лет есть?'), 'Minecraft');
+  assert.strictEqual(course_('Английский: какое расписание?'), 'Английский');
+});
+
+test('при нескольких курсах побеждает названный первым', () => {
+  assert.strictEqual(course_('Scratch или Python — что лучше в 9 лет?'), 'Scratch');
+});
+
+test('частное раньше общего: «Нейромалыш», а не «Нейро»', () => {
+  assert.strictEqual(course_('Нейромалыш: для кого подходит?'), 'Нейромалыш');
+});
+
+test('сочетания, заведённые в amoCRM отдельным курсом', () => {
+  assert.strictEqual(course_('Roblox и Blender вместе можно?'), 'Roblox + 3D Blender');
+  assert.strictEqual(course_('Blender + Unity: сколько длится?'), '3D Blender + Unity');
+});
+
+test('общий вопрос без курса — пусто', () => {
+  assert.strictEqual(course_('Что подобрать для ребёнка 4-6 лет?'), '');
+  assert.strictEqual(course_('Здравствуйте! Как записаться на пробное занятие?'), '');
+  assert.strictEqual(course_(''), '');
+});
+
+test('«community» — не курс Unity', () => {
+  assert.strictEqual(course_('Нашли вас через community родителей'), '');
+});
+
+test('префикс кнопки до двоеточия', () => {
+  assert.strictEqual(prefix_('Лепка из природной глины: как записаться на пробное?'), 'Лепка из природной глины');
+  assert.strictEqual(prefix_('Здравствуйте, расскажите про курсы'), '');
+});
+
+test('ID объявления ищется по всему событию SendPulse', () => {
+  const ref = hookBox.spReferral_({
+    info: { message: { channel_data: { message: { text: 'x', referral: {
+      source: 'ADS', ad_id: '120211', ads_context_data: { ad_title: 'Глина' } } } } } }
+  });
+  assert.strictEqual(ref.ad_id, '120211');
+  assert.strictEqual(ref.ad_title, 'Глина');
+  assert.strictEqual(hookBox.spReferral_({ contact: { id: 1 } }).ad_id, undefined,
+    'переписка не из рекламы — пусто');
+});
+
+test('текст сообщения SendPulse: из channel_data, иначе last_message', () => {
+  assert.strictEqual(spText_({ info: { message: { channel_data: { message: { text: 'Minecraft: цена?' } } } } }), 'Minecraft: цена?');
+  assert.strictEqual(spText_({ contact: { last_message: 'Глина: пробное?' } }), 'Глина: пробное?');
+  assert.strictEqual(spText_({}), '');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);

@@ -104,5 +104,19 @@ $r = alfa_revenue_core([ig_lead(['created_at' => '2026-06-10'])],
     '2026-07-01', '2026-07-31');
 ok($r['leads'] === 0, 'заявка вне периода не попадает');
 
+$r = alfa_revenue_core(
+    [ig_lead(['utm_campaign' => 'Minecraft']), ig_lead(['phone_e164' => '', 'utm_campaign' => '']),
+     ig_lead(['source' => 'Сайт', 'utm_campaign' => 'autumn_sale'])],
+    [customer(101, '+375291102796')], [pay(101, '15.07.2026', 250, 1)],
+    '2026-07-01', '2026-07-31');
+$mc = null; $none = null; $site = null;
+foreach ($r['by_course'] as $c) {
+    if ($c['course'] === 'Minecraft') $mc = $c;
+    if ($c['course'] === '(курс не определён)') $none = $c;
+    if ($c['course'] === 'autumn_sale') $site = $c;
+}
+ok($mc !== null && $mc['paid'] === 1 && $mc['revenue'] === 250.0 && $none !== null && $none['leads'] === 1
+    && $site === null, 'разрез по курсам: метка из utm_campaign, только Instagram');
+
 echo "\n$passed passed, $failed failed\n";
 exit($failed ? 1 : 0);

@@ -43,7 +43,10 @@ function doGet(e) {
   return ContentService.createTextOutput('forbidden');
 }
 
-/** Входящие события мессенджера. */
+/**
+ * Входящие события: Meta (объект с entry) и SendPulse (массив событий,
+ * см. раздел «SendPulse» ниже). Секрет в URL общий для обоих.
+ */
 function doPost(e) {
   // Meta не читает тело ответа и не повторяет доставку по коду ответа,
   // поэтому на любую ошибку отвечаем 200 и пишем в лог — иначе Meta
@@ -54,6 +57,10 @@ function doPost(e) {
       return ok_();
     }
     const body = JSON.parse(e.postData.contents);
+    if (Array.isArray(body)) {
+      body.forEach(function (ev) { handleSendPulse_(ev); });
+      return ok_();
+    }
     (body.entry || []).forEach(function (entry) {
       (entry.messaging || []).forEach(function (msg) { handleMessaging_(msg); });
     });
@@ -110,6 +117,232 @@ function appendUnique_(row) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ==================== SendPulse: курс из первого сообщения ==================== */
+
+/*
+ * AI-консультант клуба отвечает в Direct из SendPulse. Его глобальный
+ * вебхук «Входящие сообщения» шлёт сюда POST с JSON-массивом событий:
+ *   [{ service: 'instagram', title: 'incoming_message',
+ *      bot: { id, name }, contact: { id, username, name, last_message },
+ *      info: { message: ... }, date: <unix, сек> }]
+ *
+ * Первое сообщение из рекламы — это текст нажатой кнопки-вопроса, и почти
+ * всегда он начинается с курса: «Лепка из природной глины: как записаться
+ * на пробное?». Из него берём курс и кладём строку в лист «Курсы из
+ * Direct». Метку в сделку amoCRM ставит pplTagDirectCourses в проекте
+ * «ФБ»: там есть доступ к amoCRM, а сделка к моменту вебхука может ещё
+ * не появиться.
+ *
+ * Пишем только сообщения, где нашёлся курс или реклама (ad_id), и только
+ * первое такое от человека за SP_WINDOW_DAYS дней: дальше в переписке
+ * курс может упоминаться сколько угодно, метка нужна одна.
+ */
+const SP_SHEET = 'Курсы из Direct';
+const SP_HEADERS = ['ts', 'service', 'bot', 'contact_id', 'username', 'name',
+  'course', 'prefix', 'text', 'ad_id', 'ad_title', 'status', 'lead_id', 'tries'];
+const SP_WINDOW_DAYS = 7;
+
+/*
+ * SendPulse сам отличает чаты из рекламы (раздел «Эффективность рекламы»),
+ * значит referral от Meta до него доходит. Где именно он лежит в вебхуке,
+ * документация не показывает, поэтому ищем ad_id по всему событию, а
+ * первые SP_RAW_LIMIT событий кладём как есть в отдельный лист — по ним
+ * видно реальную структуру. Лист перестаёт расти сам.
+ */
+const SP_RAW_SHEET = 'SendPulse: образцы';
+const SP_RAW_LIMIT = 30;
+
+/**
+ * Словарь курсов: названия — как варианты поля «Курс в заявке» в amoCRM.
+ * Порядок важен только при совпадении позиции: частное раньше общего
+ * («Нейромалыш» раньше «Нейро»). Основное правило — побеждает курс,
+ * названный в тексте первым, потому что кнопка начинается с курса.
+ */
+const SP_COURSES = [
+  ['Minecraft', /minecraft|майнкрафт/i],
+  ['Roblox', /roblox|роблокс/i],
+  ['Scratch', /scratch|скр[еэ]тч/i],
+  ['Python', /python|пайтон|питон/i],
+  ['3D Blender', /blender|блендер/i],
+  ['Unity', /(?<![a-z])unity|юнити/i],   // не «community»
+  ['Godot', /godot|годот/i],
+  ['Digital Art', /digital[\s-]*art|диджитал|цифров\S*\s+(рисован|графи|арт|живопис)/i],
+  ['TinkerCad', /tinkercad|тинкеркад/i],
+  ['App Inventor', /app\s*inventor|апп?\s*инвентор/i],
+  ['Старт в IT', /старт\s+в\s+(it|айти)/i],
+  ['Робототехника', /робототехн|wedo|лего|lego/i],
+  ['Электроника', /электроник/i],
+  ['Английский', /англ/i],
+  ['Каллиграфия', /каллиграф/i],
+  ['Глина', /глин|лепк/i],
+  ['Полимерка', /полимер/i],
+  ['Песок', /пес(ок|к|оч)/i],
+  ['Арт-студия', /арт[\s-]*студи/i],
+  ['Рисование', /рисова|рисунк/i],
+  ['Почемучка', /почемучк/i],
+  ['Говорилка', /говорилк/i],
+  ['Живая Азбука', /азбук/i],
+  ['Нейромалыш', /нейромалыш/i],
+  ['Нейродиагностика', /нейродиагност|диагностик/i],
+  ['Нейро', /нейро/i],
+  ['Логика', /логик/i],
+  ['Математика', /математик/i],
+  ['Финансовая грамотность', /финанс|финграм/i],
+  ['Взросление', /взрослени/i],
+  ['7 навыков', /(7|семь)\s*навык/i],
+  ['Каникулы', /каникул|лагер/i],
+  ['Интенсив', /интенсив/i]
+];
+
+/** Сочетания, которые в amoCRM заведены отдельным курсом. */
+const SP_COMBOS = [
+  [['Roblox', '3D Blender'], 'Roblox + 3D Blender'],
+  [['3D Blender', 'Unity'], '3D Blender + Unity']
+];
+
+/**
+ * Курс по тексту сообщения: '' если не нашёлся. Чистая функция —
+ * гоняется в Node-тестах.
+ */
+function spCourse_(text) {
+  const s = String(text || '');
+  if (!s) return '';
+  const found = [];
+  SP_COURSES.forEach(function (c, order) {
+    const m = c[1].exec(s);
+    if (m) found.push({ name: c[0], at: m.index, order: order });
+  });
+  if (!found.length) return '';
+  const names = found.map(function (f) { return f.name; });
+  for (let i = 0; i < SP_COMBOS.length; i++) {
+    const parts = SP_COMBOS[i][0];
+    if (parts.every(function (p) { return names.indexOf(p) !== -1; })) return SP_COMBOS[i][1];
+  }
+  found.sort(function (a, b) { return a.at - b.at || a.order - b.order; });
+  return found[0].name;
+}
+
+/**
+ * Текст до двоеточия, если сообщение похоже на кнопку «Курс: вопрос?».
+ * Сохраняем как есть — по нему видно, из какой рекламы кнопка.
+ */
+function spPrefix_(text) {
+  const s = String(text || '');
+  const i = s.indexOf(':');
+  return i > 0 && i <= 60 ? s.slice(0, i).trim() : '';
+}
+
+/**
+ * Текст входящего сообщения. Точная вложенность у SendPulse зависит от
+ * мессенджера, поэтому перебираем известные места и в конце берём
+ * contact.last_message — его SendPulse кладёт всегда.
+ */
+function spText_(ev) {
+  const msg = ev && ev.info && ev.info.message;
+  const cd = msg && msg.channel_data;
+  const cand = [
+    cd && cd.message && cd.message.text && cd.message.text.body,
+    cd && cd.message && cd.message.text,
+    cd && cd.text,
+    msg && msg.text,
+    ev && ev.contact && ev.contact.last_message
+  ];
+  for (let i = 0; i < cand.length; i++) {
+    if (typeof cand[i] === 'string' && cand[i].trim()) return cand[i].trim();
+  }
+  return '';
+}
+
+/**
+ * Referral рекламы Meta внутри события SendPulse: первый объект с ad_id,
+ * где бы он ни лежал. Пустой объект, если это не переписка из рекламы.
+ * Чистая функция.
+ */
+function spReferral_(ev) {
+  let found = null;
+  (function walk(o, depth) {
+    if (found || !o || typeof o !== 'object' || depth > 8) return;
+    if (o.ad_id) { found = o; return; }
+    Object.keys(o).forEach(function (k) { walk(o[k], depth + 1); });
+  })(ev, 0);
+  if (!found) return {};
+  const ctx = found.ads_context_data || {};
+  return { ad_id: String(found.ad_id), ad_title: String(ctx.ad_title || found.ad_title || '') };
+}
+
+/** Первые SP_RAW_LIMIT событий как есть — чтобы видеть структуру вебхука. */
+function spSaveRaw_(ev) {
+  const ss = SpreadsheetApp.openById(prop_('SHEET_ID'));
+  let sh = ss.getSheetByName(SP_RAW_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SP_RAW_SHEET);
+    sh.appendRow(['ts', 'title', 'raw']);
+    sh.setFrozenRows(1);
+  }
+  if (sh.getLastRow() > SP_RAW_LIMIT) return;
+  sh.appendRow([new Date().toISOString(), ev.title || '', JSON.stringify(ev).slice(0, 45000)]);
+}
+
+/** Одно событие SendPulse. */
+function handleSendPulse_(ev) {
+  if (!ev || ev.title !== 'incoming_message') return;
+  const contact = ev.contact || {};
+  if (!contact.id) return;
+  try { spSaveRaw_(ev); } catch (e) { console.warn('spSaveRaw_: ' + e); }
+  const text = spText_(ev);
+  const course = spCourse_(text);
+  const ref = spReferral_(ev);
+  // ни курса, ни рекламы — для аналитики это просто переписка
+  if (!course && !ref.ad_id) return;
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = spSheet_();
+    const ts = new Date((Number(ev.date) || Date.now() / 1000) * 1000);
+    // уже есть курс этого человека за окно — вторая метка не нужна
+    const last = sh.getLastRow();
+    if (last > 1) {
+      const from = Math.max(2, last - 1999);   // хватит с запасом: ~неделя переписок
+      const rows = sh.getRange(from, 1, last - from + 1, 4).getValues();
+      const edge = ts.getTime() - SP_WINDOW_DAYS * 86400000;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (String(rows[i][3]) !== String(contact.id)) continue;
+        const seen = new Date(rows[i][0]).getTime();
+        if (seen >= edge) return;
+        break;
+      }
+    }
+    sh.appendRow([
+      ts.toISOString(),
+      ev.service || '',
+      (ev.bot && ev.bot.name) || '',
+      String(contact.id),
+      contact.username || '',
+      contact.name || '',
+      course,
+      spPrefix_(text),
+      text.slice(0, 500),
+      ref.ad_id || '',
+      ref.ad_title || '',
+      '', '', 0
+    ]);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function spSheet_() {
+  const ss = SpreadsheetApp.openById(prop_('SHEET_ID'));
+  let sh = ss.getSheetByName(SP_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SP_SHEET);
+    sh.appendRow(SP_HEADERS);
+    sh.setFrozenRows(1);
+  }
+  return sh;
 }
 
 function sheet_() {

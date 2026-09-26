@@ -175,6 +175,7 @@ try {
         'brands' => $core['brands'],
         'by_source' => $core['by_source'],
         'by_pipeline' => $core['by_pipeline'],
+        'by_course' => $core['by_course'],
         'paid_list' => $core['paid_list'],
     ];
 
