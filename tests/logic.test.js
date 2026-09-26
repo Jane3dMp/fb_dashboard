@@ -1142,6 +1142,8 @@ test('сделки нет: пока retry — ищем, после попыто�
 test('короткие имена аккаунтов', () => {
   assert.strictEqual(shortBot_('CODDY®🚀 ШКОЛА ПРОГРАММИРОВАНИЯ  И ДИЗАЙНА 🚀 МОГИЛЁВ'), 'CODDY');
   assert.strictEqual(shortBot_('ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ'), 'Детский клуб');
+  // так SendPulse прислал его 26.09.2026: «И» + знак краткой вместо «Й»
+  assert.strictEqual(shortBot_('ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ'), 'Детский клуб');
   assert.strictEqual(shortBot_('Детали: праздники'), 'Детали');
   assert.strictEqual(shortBot_('🎈 Новый аккаунт 🎈'), 'Новый аккаунт');
 });

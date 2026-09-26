@@ -392,8 +392,24 @@ const fmtMoney = adMoney;
 function displayName(p) {
   if (!p.name) return '—';
   if (showNames) return p.name;
-  const parts = p.name.trim().split(/\s+/);
-  return parts.map(w => w[0].toUpperCase() + '·').join(' ');
+  // инициалы — только у слов с буквы: «•», эмодзи и знаки зодиака из
+  // имени профиля Instagram иначе превращаются в строку точек
+  const parts = p.name.trim().split(/\s+/).filter(w => /^\p{L}/u.test(w));
+  return parts.length ? parts.map(w => w[0].toUpperCase() + '·').join(' ') : '·';
+}
+
+/**
+ * Короткое имя аккаунта. Сервер уже укорачивает, но «ДЕТСКИЙ КЛУБ»
+ * SendPulse отдаёт с «й» в разложенном виде, и версия 42 скрипта
+ * присылает «ДЕТСКИИ КЛУБ…» — узнаём и такое.
+ */
+function shortAccount(name) {
+  const s = String(name || '').normalize('NFC');
+  if (/coddy/i.test(s)) return 'CODDY';
+  if (/детал/i.test(s)) return 'Детали';
+  if (/детск/i.test(s)) return 'Детский клуб';
+  if (/прознан|каникул|уикенд|weekend/i.test(s)) return 'Прознание';
+  return s;
 }
 
 /** Текст из Instagram — чужой ввод: в разметку только экранированным. */
@@ -660,21 +676,23 @@ function renderDirect(r) {
   const body = document.getElementById('directBody');
   body.innerHTML = '';
   [...rows].sort((a, b) => String(b.ts).localeCompare(String(a.ts))).forEach(p => {
-    const [cls, label] = DIRECT_OUTCOME[p.outcome] || DIRECT_OUTCOME.no_lead;
+    let [cls, label] = DIRECT_OUTCOME[p.outcome] || DIRECT_OUTCOME.no_lead;
+    // старая сделка выиграна давно — «стал клиентом» тут было бы враньём
+    if (p.client && p.outcome === 'won') label = 'Клиент';
     // у отказа важнее причина, у открытой сделки — этап
     const detail = p.outcome === 'lost' ? (p.reason || p.stage) : p.outcome === 'open' ? p.stage : '';
     const link = p.lead_id && dir.amo
       ? `<a href="${esc(dir.amo)}/leads/detail/${encodeURIComponent(p.lead_id)}" target="_blank" rel="noopener">${esc(p.pipeline || 'сделка')}</a>`
       : '';
-    const sub = (p.client ? 'действующий клиент' : '') + (p.client && link ? ' · ' : '') + link;
+    const sub = (p.client ? 'уже был в amoCRM' : '') + (p.client && link ? ' · ' : '') + link;
     const cash = p.client
-      ? '<span title="Переписка ушла в старую сделку действующего клиента — его оплаты рекламе не приписываем">клиент</span>'
+      ? '<span title="Переписка ушла в сделку, которая была в amoCRM раньше, — её оплаты этой рекламе не приписываем">—</span>'
       : p.revenue ? amoMoney(p.revenue) : (p.with_alfa ? 'в Альфе' : '—');
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${new Date(p.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
       <td>${esc(displayName(p))}</td>
-      <td>${esc(p.account)}</td>
+      <td>${esc(shortAccount(p.account))}</td>
       <td class="msg">${esc(p.text)}</td>
       <td class="stage"><span class="pill ${cls}">${label}</span>${detail ? ' ' + esc(detail) : ''}${sub ? `<small>${sub}</small>` : ''}</td>
       <td class="${p.revenue ? '' : 'zero'}">${cash}</td>`;
@@ -683,13 +701,13 @@ function renderDirect(r) {
   const clients = rows.filter(p => p.client).length;
   const paid = rows.filter(p => p.revenue > 0).length;
   document.getElementById('directNote').innerHTML =
-    `Написали: <b>${fmtInt(rows.length)}</b>, из них действующих клиентов — ${fmtInt(clients)},
+    `Написали: <b>${fmtInt(rows.length)}</b>, из них уже были в amoCRM — ${fmtInt(clients)},
      заплатили — ${fmtInt(paid)}. Строка — человек, который назвал курс в первом сообщении
      (обычно это текст кнопки из рекламы). «Где сейчас» — этап сделки в amoCRM, у отказа —
      причина, которую указал менеджер; название воронки ведёт в сделку. Выручка — оплаты в
-     Альфе с даты заявки. Если переписка ушла в старую сделку действующего клиента, его оплаты
-     рекламе не приписываем. Какое именно объявление, SendPulse не передаёт: видно аккаунт и
-     текст кнопки.`;
+     Альфе с даты заявки. «Уже был в amoCRM» — amoCRM подшил переписку в сделку, заведённую
+     раньше (часто это действующий клиент): её этап показываем, а оплаты этой рекламе не
+     приписываем. Какое именно объявление, SendPulse не передаёт: видно аккаунт и текст кнопки.`;
 }
 
 /**

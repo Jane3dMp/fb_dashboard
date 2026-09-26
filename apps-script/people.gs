@@ -2553,9 +2553,9 @@ function pplDirectRow_(r, lead, stages) {
   const out = {
     ts: ts.toISOString(),
     account: pplShortBot_(r.bot),
-    name: String(r.name || r.username || '').trim(),
+    name: String(r.name || r.username || '').normalize('NFC').trim(),
     course: String(r.course || ''),
-    text: String(r.text || '').slice(0, PPL_DIRECT_TEXT_MAX),
+    text: String(r.text || '').normalize('NFC').slice(0, PPL_DIRECT_TEXT_MAX),
     lead_id: lead ? lead.id : '',
     pipeline: '', stage: '', reason: '', client: false,
     // сделки нет: пока статус пустой или retry, задача её ещё ищет
@@ -2572,14 +2572,18 @@ function pplDirectRow_(r, lead, stages) {
   return out;
 }
 
-/** Короткое имя Instagram-аккаунта — без эмодзи и слоганов. Чистая функция. */
+/**
+ * Короткое имя Instagram-аккаунта — без эмодзи и слоганов. Чистая функция.
+ * SendPulse отдаёт имя аккаунта «ДЕТСКИЙ КЛУБ…» в разложенном виде («и» +
+ * знак краткой вместо «й», 26.09.2026), поэтому сначала собираем буквы.
+ */
 function pplShortBot_(name) {
-  const s = String(name || '');
+  const s = String(name || '').normalize('NFC');
   if (/coddy/i.test(s)) return 'CODDY';
   if (/детал/i.test(s)) return 'Детали';
-  if (/детский клуб/i.test(s)) return 'Детский клуб';
+  if (/детск/i.test(s)) return 'Детский клуб';
   if (/прознан|каникул|уикенд|weekend/i.test(s)) return 'Прознание';
-  return s.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().slice(0, 24);
+  return s.replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().slice(0, 24);
 }
 
 /** Воронки amoCRM с этапами: { id: { name, statuses: { id: название } } }. */
