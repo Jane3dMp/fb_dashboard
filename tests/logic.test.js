@@ -1099,9 +1099,177 @@ test('значение поля сделки читается по id, пуст�
   assert.strictEqual(leadField_({}, 1648719), '');
 });
 
+/* ---------- пересбор RAW_pays порциями ---------- */
+
+const payRow_ = sandbox.pplPayRow_;
+const paysNextPos_ = sandbox.pplPaysNextPos_;
+const paysCollect_ = sandbox.pplPaysCollect_;
+const paysAssemble_ = sandbox.pplPaysAssemble_;
+const briefBody_ = sandbox.pplBriefBody_;
+// const верхнего уровня не попадает в sandbox, но видна следующему скрипту
+const PAYS_MAX_PAGES = vm.runInContext('PPL_PAYS_MAX_PAGES', sandbox);
+
+// Альфа в миниатюре: pay/index отдаёт страницы по 50
+const alfaPay = (id, extra) => Object.assign({
+  id, pay_type_id: 1, document_date: '08.09.2026', customer_id: 1000 + id,
+  income: '25.5', pay_item_id: 3, payer_name: 'Плательщик ' + id
+}, extra || {});
+const payRange = (from, n) => Array.from({ length: n }, (_, i) => alfaPay(from + i));
+const fakeAlfa = (byBranch) => (branch, page) =>
+  ({ items: (byBranch[branch] || []).slice(page * 50, page * 50 + 50) });
+
+/** Прежний пересбор одним проходом — эталон, с которым сверяем порции. */
+function oneShotPays(branches, fetchPage) {
+  const rows = [], seen = {};
+  branches.forEach(branch => {
+    for (let page = 0; page < 800; page++) {
+      const items = fetchPage(branch, page).items || [];
+      items.forEach(it => {
+        if (it.pay_type_id !== 1) return;
+        if (it.id && seen[it.id]) return;
+        if (it.id) seen[it.id] = true;
+        rows.push([it.document_date, it.customer_id, Number(it.income || 0), branch,
+          it.pay_item_id || '', it.payer_name || '', it.id]);
+      });
+      if (items.length < 50) break;
+    }
+  });
+  return rows;
+}
+
+/**
+ * Пересбор так, как его пройдут запуски: каждому perRun страниц, следующий
+ * продолжает с последней записанной страницы — как pplPaysStep_. killAt —
+ * на каком вызове часов запуск «убивает» лимит времени.
+ */
+function runPays(branches, fetchPage, perRun, killAt) {
+  const staged = [];
+  let from = { b: 0, page: 0 };
+  let runs = 0, errors = 0, clock = 0;
+  while (from.b < branches.length && runs < 100) {
+    runs++;
+    let budget = perRun;
+    const hasTime = () => {
+      if (killAt && ++clock === killAt) throw new Error('Exceeded maximum execution time');
+      return budget-- > 0;
+    };
+    try {
+      if (paysCollect_(from, branches, fetchPage, hasTime, pages => staged.push(...pages)).error) errors++;
+    } catch (e) { errors++; }
+    const tail = staged[staged.length - 1];
+    from = tail ? paysNextPos_(tail[0], tail[1], tail[2]) : { b: 0, page: 0 };
+  }
+  return { rows: paysAssemble_(staged), runs, errors };
+}
+
+// 1237 платежей — 25 страниц, из них полных 24; ровно 100 — две полные и
+// пустая третья; зеркальный дубль и расход в четвёртом; пятый пуст
+const paysBranches = ['1', '2', '4', '5'];
+const paysData = {
+  '1': payRange(1, 1237),
+  '2': payRange(5001, 100),
+  '4': [alfaPay(7), alfaPay(9001, { pay_type_id: 2 }), ...payRange(9002, 28)],
+  '5': []
+};
+
+console.log('\nПересбор RAW_pays порциями');
+
+test('порции дают ровно то же, что прежний сплошной проход', () => {
+  const alfa = fakeAlfa(paysData);
+  const expected = JSON.stringify(oneShotPays(paysBranches, alfa));
+  [1, 7, 23, 1000].forEach(perRun => {
+    let calls = 0;
+    const out = runPays(paysBranches, (b, p) => { calls++; return alfa(b, p); }, perRun);
+    assert.strictEqual(JSON.stringify(out.rows), expected, perRun + ' стр. за запуск');
+    // дубли отсеял бы и дедуп, поэтому лишние скачивания ловим счётчиком
+    assert.strictEqual(calls, 30, 'каждая страница скачана один раз');
+  });
+  assert.strictEqual(runPays(paysBranches, alfa, 7).runs, 5, '30 страниц по 7 — пять запусков');
+  assert.strictEqual(runPays(paysBranches, alfa, 1000).runs, 1, 'хватило времени — один запуск');
+  assert.strictEqual(JSON.parse(expected).length, 1237 + 100 + 28, 'дубль и расход отброшены');
+});
+
+test('сбой Альфы: следующий запуск начинает с той же страницы, ничего не теряется', () => {
+  const alfa = fakeAlfa(paysData);
+  let failed = false;
+  const flaky = (branch, page) => {
+    if (branch === '1' && page === 12 && !failed) { failed = true; throw new Error('Альфа pay/1: 400'); }
+    return alfa(branch, page);
+  };
+  const out = runPays(paysBranches, flaky, 23);
+  assert.strictEqual(out.errors, 1);
+  assert.strictEqual(JSON.stringify(out.rows), JSON.stringify(oneShotPays(paysBranches, alfa)));
+});
+
+test('запуск, оборванный лимитом времени, теряет только незаписанные страницы', () => {
+  const alfa = fakeAlfa(paysData);
+  let calls = 0;
+  // 23-й взгляд на часы: 20 страниц уже записаны, ещё 2 скачаны, но нет
+  const out = runPays(paysBranches, (b, p) => { calls++; return alfa(b, p); }, 23, 23);
+  assert.strictEqual(out.errors, 1);
+  assert.strictEqual(calls, 32, 'перекачаны только две незаписанные страницы');
+  assert.strictEqual(JSON.stringify(out.rows), JSON.stringify(oneShotPays(paysBranches, alfa)));
+});
+
+test('новый платёж посреди пересбора сдвигает страницы — дубль берётся один раз', () => {
+  // Альфа отдаёт новые платежи первыми: пришедший между запусками
+  // сдвигает остальные на одну позицию вниз
+  const before = { '1': payRange(1, 120) };
+  const after = { '1': [alfaPay(999), ...payRange(1, 120)] };
+  let run = 0;
+  const shifting = (branch, page) => fakeAlfa(run > 1 ? after : before)(branch, page);
+  const staged = [];
+  let from = { b: 0, page: 0 };
+  while (from.b < 1 && run < 20) {
+    run++;
+    let budget = 1;
+    paysCollect_(from, ['1'], shifting, () => budget-- > 0, pages => staged.push(...pages));
+    const tail = staged[staged.length - 1];
+    from = paysNextPos_(tail[0], tail[1], tail[2]);
+  }
+  const ids = paysAssemble_(staged).map(r => r[6]);
+  assert.strictEqual(ids.length, 120, 'каждый прежний платёж — ровно один раз');
+  assert.strictEqual(new Set(ids).size, 120);
+  assert.ok(ids.indexOf(999) === -1, 'новый платёж был на уже скачанной странице — его добавит живая дельта и завтрашний пересбор');
+});
+
+test('следующая страница: полная — дальше по филиалу, неполная — следующий филиал', () => {
+  const pos = (b, page, count) => JSON.stringify(paysNextPos_(b, page, count));
+  assert.strictEqual(pos(0, 3, 50), '{"b":0,"page":4}');
+  assert.strictEqual(pos(0, 3, 49), '{"b":1,"page":0}');
+  assert.strictEqual(pos(1, 2, 0), '{"b":2,"page":0}', 'пустая страница после полной');
+  assert.strictEqual(pos(0, PAYS_MAX_PAGES - 1, 50), '{"b":1,"page":0}', 'потолок страниц на филиал');
+});
+
+test('строка RAW_pays: те же колонки и типы, что писал прежний пересбор', () => {
+  assert.strictEqual(JSON.stringify(payRow_(alfaPay(7), '1')),
+    '["08.09.2026",1007,25.5,"1",3,"Плательщик 7",7]');
+  assert.strictEqual(JSON.stringify(payRow_({ id: 9, pay_type_id: 1, document_date: '01.09.2026', customer_id: 5 }, '2')),
+    '["01.09.2026",5,0,"2","","",9]', 'пустые поля — пустые строки, сумма — ноль');
+  assert.strictEqual(payRow_(alfaPay(8, { pay_type_id: 2 }), '1'), null, 'расход не берём');
+});
+
+test('сборка из служебного листа: порядок скачивания, платёж из зеркала — один раз', () => {
+  const rows = paysAssemble_([
+    [0, 0, 2, JSON.stringify([['01.09.2026', 1, 10, '1', '', '', 11], ['01.09.2026', 2, 20, '1', '', '', 12]])],
+    [1, 0, 0, '[]'],
+    [2, 0, 2, JSON.stringify([['01.09.2026', 1, 10, '4', '', '', 11], ['02.09.2026', 3, 30, '4', '', '', 13]])]
+  ]);
+  assert.strictEqual(JSON.stringify(rows.map(r => r[6] + '@' + r[3])), '["11@1","12@1","13@4"]');
+});
+
+test('HTML-страница ошибки Альфы ужимается до заголовка и текста', () => {
+  const html = '<!DOCTYPE html>\n<html lang="ru">\n    <head>\n        <meta charset="UTF-8">\n' +
+    '        <title>Bad Request (#400)</title>\n<style>body { color: red }</style>\n    </head>\n' +
+    '<body><h1>Bad Request (#400)</h1>\n<p>Неверные параметры запроса.</p><script>var x = 1;</script></body></html>';
+  assert.strictEqual(briefBody_(html), 'Bad Request (#400): Bad Request (#400) Неверные параметры запроса.');
+  assert.strictEqual(briefBody_('{"errors":["page"]}'), '{"errors":["page"]}', 'не HTML — как есть');
+  assert.strictEqual(briefBody_(''), '');
+});
+
 /* ---------- webhook.gs: словарь курсов ---------- */
 
-const hookBox = { console, LockService: {}, SpreadsheetApp: {}, PropertiesService: {}, ContentService: {} };
+const hookBox ={ console, LockService: {}, SpreadsheetApp: {}, PropertiesService: {}, ContentService: {} };
 vm.createContext(hookBox);
 vm.runInContext(
   fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'webhook.gs'), 'utf8'),

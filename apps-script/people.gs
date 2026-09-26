@@ -700,9 +700,39 @@ function pplAlfaPage_(session, branch, entity, body) {
     payload: JSON.stringify(body), muteHttpExceptions: true
   });
   if (resp.getResponseCode() !== 200) {
-    throw new Error('Альфа ' + entity + '/' + branch + ': ' + resp.getResponseCode() + ' ' + resp.getContentText().slice(0, 150));
+    throw new Error('Альфа ' + entity + '/' + branch + ': ' + resp.getResponseCode() + ' ' + pplBriefBody_(resp.getContentText()));
   }
   return JSON.parse(resp.getContentText());
+}
+
+/**
+ * Начало ответа для текста ошибки. HTML-страницу ужимаем до заголовка и
+ * текста без разметки: 25.09.2026 Альфа ответила такой страницей с кодом
+ * 400, и в журнал попала только её шапка — что случилось, не понять.
+ */
+function pplBriefBody_(text) {
+  const s = String(text || '');
+  if (!/^\s*</.test(s)) return s.slice(0, 150);
+  const title = ((s.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '').trim();
+  const body = s.replace(/<(head|script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return ((title ? title + ': ' : '') + body).slice(0, 200);
+}
+
+/**
+ * pplAlfaPage_ с повтором. Альфа изредка отвечает страницей ошибки
+ * посреди выгрузки (25.09.2026 — 400 на 37-й секунде), а UrlFetch —
+ * сетевым сбоем; страницу пробуем ещё дважды, прежде чем сдаться.
+ */
+function pplAlfaPageRetry_(session, branch, entity, body) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return pplAlfaPage_(session, branch, entity, body);
+    } catch (e) {
+      if (attempt >= 3) throw e;
+      Utilities.sleep(attempt * 5000);
+    }
+  }
 }
 
 /**
@@ -774,49 +804,244 @@ function pplEtlAlfaCustomers() {
  * историю целиком; а отметка загруженного месяца сравнивала строку
  * «2026-07» с датой, в которую Sheets превратил ячейку, никогда не
  * совпадала — и текущий месяц дописывался заново каждый день. Итог в
- * листе: история в трёх экземплярах. Полный пересбор дешёв (одна-две
- * минуты), самовосстанавливается и не требует вести учёт месяцев.
+ * листе: история в трёх экземплярах. Полный пересбор самовосстанавливается
+ * и не требует вести учёт месяцев.
  *
  * Только доходы (pay_type_id 1), дедупликация по pay_id: id платежа
  * в Альфе глобальный, у филиалов-зеркал он один и тот же.
+ *
+ * Пересбор идёт порциями. Страниц по 50 платежей уже под шестьсот
+ * (сентябрь 2026), и один проход перестал укладываться в 6 минут —
+ * лимит запуска Apps Script: обрывался по таймауту день за днём, и лист
+ * застыл на платежах по 8.09. Теперь скачанные страницы копятся в
+ * служебном листе PPL_PAYS_NEXT_SHEET, а запуск, у которого кончилось
+ * время, оставляет продолжение разовому триггеру pplRebuildPaysNext.
+ * RAW_pays переписывается одним махом, когда собраны все филиалы, —
+ * до этого дашборды видят вчерашний лист целиком, как и раньше.
+ *
+ * Запуск руками из редактора начинает пересбор заново.
  */
 function pplRebuildPays() {
-  const session = pplAlfaSession_();
-  const rows = [];
-  const seen = {};
-  pplAlfaBranches_().forEach(function (branch) {
-    for (var page = 0; page < 800; page++) {
-      const d = pplAlfaPage_(session, branch, 'pay', { page: page, pay_type_id: 1 });
-      const items = d.items || [];
-      items.forEach(function (it) {
-        if (it.pay_type_id !== 1) return; // страховка на случай поломки фильтра
-        if (it.id && seen[it.id]) return;
-        if (it.id) seen[it.id] = true;
-        rows.push([
-          it.document_date,
-          it.customer_id,
-          Number(it.income || 0),
-          branch,
-          it.pay_item_id || '',
-          it.payer_name || '',
-          it.id
-        ]);
-      });
-      if (items.length < 50) break;
+  pplPaysStep_(true);
+}
+
+/** Продолжение пересбора RAW_pays. Триггер на него ставит сам пересбор. */
+function pplRebuildPaysNext() {
+  pplPaysStep_(false);
+}
+
+/**
+ * Служебный лист пересбора, скрытый. В A1 — состояние в JSON, со второй
+ * строки — скачанные страницы: [номер филиала в списке, страница,
+ * сколько платежей пришло, JSON строк RAW_pays].
+ */
+const PPL_PAYS_NEXT_SHEET = 'RAW_pays_next';
+const PPL_PAYS_HEADER = ['document_date', 'customer_id', 'income', 'branch', 'pay_item_id', 'payer_name', 'pay_id'];
+/** Потолок страниц на филиал — на случай, если Альфа перестанет понимать page. */
+const PPL_PAYS_MAX_PAGES = 800;
+/** Столько запуск качает страницы; остаток до 6 минут — на запись листа. */
+const PPL_PAYS_BUDGET_MS = 4 * 60000;
+/** Продолжение — не раньше, чем текущий запуск закончится в любом случае. */
+const PPL_PAYS_NEXT_DELAY_MS = 7 * 60000;
+/** Столько запусков даём одному пересбору; дальше — до утреннего триггера. */
+const PPL_PAYS_MAX_RUNS = 12;
+/** Страниц между записями в служебный лист: оборвётся запуск — перекачаем не больше. */
+const PPL_PAYS_FLUSH_EVERY = 20;
+
+/**
+ * Один запуск пересбора: порция страниц, а если собрано всё — запись
+ * RAW_pays. fresh — начать заново (утренний триггер, ручной запуск).
+ */
+function pplPaysStep_(fresh) {
+  const t0 = Date.now();
+  const lock = LockService.getScriptLock();
+  // два запуска разом перемешали бы страницы в служебном листе
+  if (!lock.tryLock(5000)) {
+    Logger.log('RAW_pays: пересбор уже идёт в другом запуске');
+    return;
+  }
+  try {
+    const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
+    let stage = ss.getSheetByName(PPL_PAYS_NEXT_SHEET);
+    if (!stage) {
+      stage = ss.insertSheet(PPL_PAYS_NEXT_SHEET);
+      stage.hideSheet();
     }
+
+    let job = pplPaysJob_(stage);
+    if (fresh) {
+      stage.clearContents();
+      job = { active: true, started: new Date().toISOString(), branches: pplAlfaBranches_(), runs: 0 };
+    } else if (!job || !job.active) {
+      pplPaysDropNext_();
+      return;
+    }
+    job.runs++;
+    if (job.runs > PPL_PAYS_MAX_RUNS) {
+      job.active = false;
+      pplPaysSaveJob_(stage, job);
+      pplPaysDropNext_();
+      throw new Error('RAW_pays: пересбор не уложился в ' + PPL_PAYS_MAX_RUNS +
+        ' запусков, лист не перезаписан. Последняя ошибка: ' + (job.error || 'нет'));
+    }
+    pplPaysSaveJob_(stage, job);
+    // Продолжение ставим до работы, а не после: если запуск оборвёт лимит
+    // времени, до кода после цикла дело не дойдёт, а триггер уже стоит.
+    pplPaysDropNext_();
+    ScriptApp.newTrigger('pplRebuildPaysNext').timeBased().after(PPL_PAYS_NEXT_DELAY_MS).create();
+
+    // где остановились — видно по последней скачанной странице
+    let row = stage.getLastRow() + 1;
+    const tail = row > 2 ? stage.getRange(row - 1, 1, 1, 3).getValues()[0] : null;
+    const from = tail ? pplPaysNextPos_(Number(tail[0]), Number(tail[1]), Number(tail[2])) : { b: 0, page: 0 };
+
+    const session = pplAlfaSession_();
+    const res = pplPaysCollect_(from, job.branches,
+      function (branch, page) {
+        return pplAlfaPageRetry_(session, branch, 'pay', { page: page, pay_type_id: 1 });
+      },
+      function () { return Date.now() - t0 < PPL_PAYS_BUDGET_MS; },
+      function (pages) {
+        stage.getRange(row, 1, pages.length, 4).setValues(pages);
+        row += pages.length;
+      });
+
+    const at = res.pos.b < job.branches.length
+      ? 'филиал ' + job.branches[res.pos.b] + ', стр. ' + res.pos.page : 'конец';
+    Logger.log('RAW_pays: запуск ' + job.runs + ' — ' + res.pages + ' стр. за ' +
+      Math.round((Date.now() - t0) / 1000) + ' с, остановились: ' + at);
+    if (res.error) {
+      job.error = String(res.error).slice(0, 300);
+      pplPaysSaveJob_(stage, job);
+      throw res.error; // продолжение уже стоит — начнёт с этой же страницы
+    }
+    if (res.pos.b < job.branches.length) return; // остальное — в следующем запуске
+
+    const rows = row > 2 ? pplPaysAssemble_(stage.getRange(2, 1, row - 2, 4).getValues()) : [];
+    // Если Альфа вдруг отдала подозрительно мало, лист не трогаем: пусть
+    // лучше останутся вчерашние данные, чем пустая витрина.
+    if (rows.length < 1000) {
+      job.active = false;
+      job.error = 'Альфа отдала всего ' + rows.length + ' платежей';
+      pplPaysSaveJob_(stage, job);
+      pplPaysDropNext_();
+      throw new Error('Альфа отдала всего ' + rows.length + ' платежей — лист не перезаписываем');
+    }
+
+    const sh = ss.getSheetByName('RAW_pays') || ss.insertSheet('RAW_pays');
+    sh.clearContents();
+    sh.getRange(1, 1, 1, PPL_PAYS_HEADER.length).setValues([PPL_PAYS_HEADER]);
+    sh.getRange(2, 1, rows.length, PPL_PAYS_HEADER.length).setValues(rows);
+
+    stage.clearContents();
+    pplPaysSaveJob_(stage, {
+      active: false, started: job.started, done: new Date().toISOString(),
+      runs: job.runs, rows: rows.length
+    });
+    pplPaysDropNext_();
+    Logger.log('RAW_pays: ' + rows.length + ' платежей из филиалов ' + job.branches.join(',') +
+      ', запусков: ' + job.runs);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Состояние пересбора из A1 служебного листа; нет или битое — null. */
+function pplPaysJob_(stage) {
+  try {
+    return JSON.parse(String(stage.getRange(1, 1).getValue() || ''));
+  } catch (e) {
+    return null;
+  }
+}
+
+function pplPaysSaveJob_(stage, job) {
+  stage.getRange(1, 1).setValue(JSON.stringify(job));
+}
+
+/** Снять триггеры продолжения — и уже сработавший, и ждущий. */
+function pplPaysDropNext_() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pplRebuildPaysNext') ScriptApp.deleteTrigger(t);
   });
+}
 
-  // Если Альфа вдруг отдала подозрительно мало, лист не трогаем: пусть
-  // лучше останутся вчерашние данные, чем пустая витрина.
-  if (rows.length < 1000) throw new Error('Альфа отдала всего ' + rows.length + ' платежей — лист не перезаписываем');
+/**
+ * Качает страницы платежей с позиции from ({b: номер филиала в списке,
+ * page}), пока hasTime() разрешает, и сдаёт их в flush строками
+ * служебного листа. Сеть и часы приходят снаружи — функция чистая и
+ * гоняется в Node-тестах. Если страница так и не скачалась, позиция
+ * остаётся на ней, чтобы следующий запуск начал с неё же.
+ */
+function pplPaysCollect_(from, branches, fetchPage, hasTime, flush) {
+  let pos = from;
+  let buf = [];
+  let pages = 0;
+  let error = null;
+  while (pos.b < branches.length && hasTime()) {
+    const branch = branches[pos.b];
+    let items;
+    try {
+      items = (fetchPage(branch, pos.page) || {}).items || [];
+    } catch (e) {
+      error = e;
+      break;
+    }
+    const rows = [];
+    items.forEach(function (it) {
+      const r = pplPayRow_(it, branch);
+      if (r) rows.push(r);
+    });
+    buf.push([pos.b, pos.page, items.length, JSON.stringify(rows)]);
+    pages++;
+    if (buf.length >= PPL_PAYS_FLUSH_EVERY) {
+      flush(buf);
+      buf = [];
+    }
+    pos = pplPaysNextPos_(pos.b, pos.page, items.length);
+  }
+  if (buf.length) flush(buf);
+  return { pos: pos, pages: pages, error: error };
+}
 
-  const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
-  const sh = ss.getSheetByName('RAW_pays') || ss.insertSheet('RAW_pays');
-  sh.clearContents();
-  const header = ['document_date', 'customer_id', 'income', 'branch', 'pay_item_id', 'payer_name', 'pay_id'];
-  sh.getRange(1, 1, 1, header.length).setValues([header]);
-  sh.getRange(2, 1, rows.length, header.length).setValues(rows);
-  Logger.log('RAW_pays: ' + rows.length + ' платежей из филиалов ' + pplAlfaBranches_().join(','));
+/** Какую страницу качать следующей: неполная страница — филиал кончился. */
+function pplPaysNextPos_(b, page, count) {
+  if (count < 50 || page + 1 >= PPL_PAYS_MAX_PAGES) return { b: b + 1, page: 0 };
+  return { b: b, page: page + 1 };
+}
+
+/** Платёж Альфы → строка RAW_pays (колонки PPL_PAYS_HEADER); не доход — null. */
+function pplPayRow_(it, branch) {
+  if (it.pay_type_id !== 1) return null; // страховка на случай поломки фильтра
+  return [
+    it.document_date,
+    it.customer_id,
+    Number(it.income || 0),
+    branch,
+    it.pay_item_id || '',
+    it.payer_name || '',
+    it.id
+  ];
+}
+
+/**
+ * Страницы из служебного листа → строки RAW_pays в порядке скачивания.
+ * Платёж, который попался дважды (филиал-зеркало или сдвиг страниц:
+ * Альфа отдаёт новые платежи первыми, и пришедший во время пересбора
+ * сдвигает остальные), берётся один раз — по pay_id, первым.
+ */
+function pplPaysAssemble_(pages) {
+  const out = [];
+  const seen = {};
+  pages.forEach(function (p) {
+    JSON.parse(String(p[3] || '[]')).forEach(function (r) {
+      const id = r[6];
+      if (id && seen[id]) return;
+      if (id) seen[id] = true;
+      out.push(r);
+    });
+  });
+  return out;
 }
 
 /**
