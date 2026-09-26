@@ -2123,14 +2123,20 @@ function pplTagOneDirect_(msg, base, token) {
 
 /**
  * Контакты amoCRM, которые действительно этот человек: имя контакта
- * совпадает с ником или именем в Instagram (без учёта регистра и «@»).
- * Поиск amoCRM ищет и по подстроке, и по телефонам — брать первого
- * попавшегося нельзя. Чистая функция.
+ * совпадает с ником или именем в Instagram. Регистр, «@», эмодзи и порядок
+ * слов не важны: amoCRM называет контакт «Фамилия Имя», и профиль «Jane Mp»
+ * становится контактом «Mp Jane». Поиск amoCRM ищет и по подстроке, и по
+ * телефонам — брать первого попавшегося нельзя. Чистая функция.
  */
 function pplDirectContacts_(msg, contacts) {
-  const norm = function (s) { return String(s || '').replace(/^@/, '').trim().toLowerCase(); };
-  const want = [norm(msg.username), norm(msg.name)].filter(Boolean);
-  return (contacts || []).filter(function (c) { return want.indexOf(norm(c.name)) !== -1; });
+  const want = [pplNameKey_(msg.username), pplNameKey_(msg.name)].filter(Boolean);
+  return (contacts || []).filter(function (c) { return want.indexOf(pplNameKey_(c.name)) !== -1; });
+}
+
+/** Имя как набор слов: без регистра, знаков и эмодзи, слова по алфавиту. */
+function pplNameKey_(s) {
+  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    .split(' ').filter(Boolean).sort().join(' ');
 }
 
 /**

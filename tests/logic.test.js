@@ -1003,6 +1003,23 @@ test('контакт берётся только при совпадении и�
   assert.deepStrictEqual(out.map(c => c.id), [1, 3]);
 });
 
+test('контакт «Фамилия Имя» находится по профилю «Имя Фамилия»', () => {
+  // так amoCRM назвал контакт на тестовое сообщение 26.09.2026
+  const out = directContacts_(
+    { username: 'jane3dmp', name: 'Jane Mp' },
+    [{ id: 1, name: 'Mp Jane' }, { id: 2, name: 'Jane Smith' }, { id: 3, name: 'Jane Mp' }]
+  );
+  assert.deepStrictEqual(out.map(c => c.id), [1, 3]);
+});
+
+test('эмодзи и знаки в имени профиля не мешают совпадению', () => {
+  const out = directContacts_(
+    { username: 'diana_k', name: 'Diana💎' },
+    [{ id: 1, name: 'Diana' }, { id: 2, name: 'Диана' }, { id: 3, name: '💎' }]
+  );
+  assert.deepStrictEqual(out.map(c => c.id), [1]);
+});
+
 test('значение поля сделки читается по id, пустое — пустая строка', () => {
   const lead = { custom_fields_values: [{ field_id: 1648719, values: [{ value: ' Глина ' }] }] };
   assert.strictEqual(leadField_(lead, 1648719), 'Глина');
