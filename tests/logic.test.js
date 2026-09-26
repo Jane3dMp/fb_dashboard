@@ -1020,6 +1020,78 @@ test('эмодзи и знаки в имени профиля не мешают 
   assert.deepStrictEqual(out.map(c => c.id), [1]);
 });
 
+const pickEvent_ = sandbox.pplPickChatEventLead_;
+const directPatch_ = sandbox.pplDirectPatch_;
+const chatEv = (lead, iso, origin) => ({
+  entity_type: 'lead', entity_id: lead, created_at: unix(iso),
+  value_after: [{ message: { origin: origin || 'instagram_business', talk_id: 1 } }]
+});
+
+test('сделка по событию «входящее сообщение» — ближайшая к вебхуку', () => {
+  // 26.09.2026: сообщение про английский amoCRM подшил в старую сделку
+  // клиента за 2 с до вебхука SendPulse, через 19 с написал другой человек
+  const id = pickEvent_('2026-09-26T15:30:59Z', [
+    chatEv(38873133, '2026-09-26T15:31:18Z'),
+    chatEv(37034381, '2026-09-26T15:30:57Z')
+  ]);
+  assert.strictEqual(id, 37034381);
+});
+
+test('события не из Instagram, не по сделке и вне окна не берутся', () => {
+  const id = pickEvent_('2026-09-26T15:30:59Z', [
+    chatEv(1, '2026-09-26T15:30:58Z', 'viber'),
+    chatEv(2, '2026-09-26T15:20:00Z'),
+    Object.assign(chatEv(3, '2026-09-26T15:30:57Z'), { entity_type: 'contact' })
+  ]);
+  assert.strictEqual(id, 0);
+});
+
+test('двое написали почти одновременно — сделку по событию не угадываем', () => {
+  const id = pickEvent_('2026-09-26T15:30:59Z', [
+    chatEv(1, '2026-09-26T15:30:57Z'),
+    chatEv(2, '2026-09-26T15:30:58Z')
+  ]);
+  assert.strictEqual(id, 0);
+});
+
+test('несколько сообщений одного человека подряд — одна сделка', () => {
+  const id = pickEvent_('2026-09-26T15:30:59Z', [
+    chatEv(7, '2026-09-26T15:30:57Z'),
+    chatEv(7, '2026-09-26T15:30:58Z')
+  ]);
+  assert.strictEqual(id, 7);
+});
+
+test('новая сделка: курс в utm_campaign, объявление в utm_content, тег', () => {
+  const p = directPatch_(
+    { ts: '2026-09-26T15:20:05Z', course: 'Minecraft', ad_id: '120' },
+    { id: 5, created_at: unix('2026-09-26T15:20:01Z') }
+  );
+  assert.strictEqual(p.status, 'ok');
+  assert.strictEqual(p.patch.custom_fields_values.map(f => f.values[0].value).join('|'), 'Minecraft|120');
+  assert.strictEqual(JSON.stringify(p.patch.tags_to_add), JSON.stringify([{ name: 'курс: Minecraft' }]));
+});
+
+test('старая сделка клиента: только тег, поля не трогаем', () => {
+  // иначе английский приписался бы к оплатам за Roblox из этой сделки
+  const p = directPatch_(
+    { ts: '2026-09-26T15:30:59Z', course: 'Английский', ad_id: '' },
+    { id: 37034381, created_at: unix('2026-05-14T06:18:00Z') }
+  );
+  assert.strictEqual(p.status, 'old_lead');
+  assert.strictEqual(p.patch.custom_fields_values, undefined);
+  assert.strictEqual(JSON.stringify(p.patch.tags_to_add), JSON.stringify([{ name: 'курс: Английский' }]));
+});
+
+test('utm_campaign у новой сделки уже заполнен — не перезаписываем', () => {
+  const p = directPatch_(
+    { ts: '2026-09-26T15:20:05Z', course: 'Minecraft', ad_id: '' },
+    { id: 5, created_at: unix('2026-09-26T15:20:01Z'), custom_fields_values: [{ field_id: 1648719, values: [{ value: 'Roblox' }] }] }
+  );
+  assert.strictEqual(p.status, 'has_value');
+  assert.strictEqual(p.patch.custom_fields_values, undefined);
+});
+
 test('значение поля сделки читается по id, пустое — пустая строка', () => {
   const lead = { custom_fields_values: [{ field_id: 1648719, values: [{ value: ' Глина ' }] }] };
   assert.strictEqual(leadField_(lead, 1648719), 'Глина');
