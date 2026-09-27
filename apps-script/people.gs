@@ -2361,8 +2361,12 @@ const PPL_LOCAL_UTC_OFFSET = 3;
  * площадка и место показа, час дня и день недели — где переписка
  * обходится дешевле и куда деньги уходят впустую.
  *
- * Всё на уровне кабинета: вопрос «кому и где показывать» решается в
- * группах объявлений, а разрез каждого объявления в таблицу не влезет.
+ * По Instagram-профилям: в «Детали» пишут одни люди, в CODDY, «Прознание»
+ * и «Уикенд» — другие, и общая таблица по кабинету их смешивала. Поэтому
+ * разрезы запрашиваются по каждому объявлению (level=ad) и раскладываются
+ * по профилю из креатива — тем же pplIgProfileMap_, что делит «Дни».
+ * «Все вместе» — сумма тех же строк, а не отдельный запрос: иначе итог
+ * профилей и общий расходились бы на спрятанные Meta мелкие ячейки.
  * Восемь запросов (4 разреза × 2 кабинета) уходят разом через fetchAll.
  *
  * Почасовую разбивку с 6 августа 2026 года Meta отдаёт не всем кабинетам:
@@ -2376,7 +2380,8 @@ function pplBuildAudience(params) {
   const since = params.since || pplIsoDate_(pplDaysAgo_(29));
 
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'aud_' + since + '_' + until;
+  // номер в ключе — версия формата ответа, см. pplBuildDaily
+  const cacheKey = 'aud2_' + since + '_' + until;
   if (params.nocache !== '1') {
     const hit = cache.get(cacheKey);
     if (hit) return JSON.parse(hit);
@@ -2388,68 +2393,53 @@ function pplBuildAudience(params) {
     'breakdowns=hourly_stats_aggregated_by_advertiser_time_zone',
     'time_increment=1'
   ];
-  const AGE = 0, PLACE = 1, HOUR = 2;
+  const HOUR = 2;
   const accts = pplAdAccounts_();
   const tz = pplAccountTz_();
   const range = encodeURIComponent(JSON.stringify({ since: since, until: until }));
   const paths = [];
   accts.forEach(function (acct) {
     CUTS.forEach(function (cut) {
-      paths.push(acct + '/insights?level=account&' + cut +
-        '&fields=spend,impressions,clicks,inline_link_clicks,actions,account_currency' +
+      paths.push(acct + '/insights?level=ad&' + cut +
+        '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions,account_currency' +
         '&time_range=' + range + '&limit=500');
     });
   });
 
-  const ageGender = {}, places = {}, hours = {}, weekdays = {};
-  const dayRows = [];
-  let currency = '', mixed = false, partial = false, hoursFailed = false, hourRows = 0;
+  const rowsByCut = CUTS.map(function () { return []; });
+  let currency = '', mixed = false, partial = false, hoursFailed = false;
   pplGraphAll_(paths).forEach(function (body, i) {
-    const acct = accts[Math.floor(i / CUTS.length)];
     const cut = i % CUTS.length;
-    const res = pplGraphRows_(body, 5);
+    // строк по объявлениям много: объявления × возрасты, × часы, × дни
+    const res = pplGraphRows_(body, 12);
     if (!res.ok) {
       if (cut === HOUR) hoursFailed = true;
       else partial = true;
     }
     res.rows.forEach(function (r) {
+      r.account = accts[Math.floor(i / CUTS.length)];
       const cur = String(r.account_currency || '');
       if (cur) {
         if (!currency) currency = cur;
         else if (currency !== cur) mixed = true;
       }
-      if (cut === AGE) {
-        pplBucket_(ageGender, r.age + '|' + r.gender, { age: r.age || '', gender: r.gender || '' }, r);
-      } else if (cut === PLACE) {
-        pplBucket_(places, r.publisher_platform + '|' + r.platform_position,
-          { platform: r.publisher_platform || '', position: r.platform_position || '' }, r);
-      } else if (cut === HOUR) {
-        const h = pplLocalHour_(r.hourly_stats_aggregated_by_advertiser_time_zone, (tz[acct] || {}).offset);
-        if (h === null) return;
-        hourRows++;
-        pplBucket_(hours, h, { hour: h }, r);
-      } else {
-        dayRows.push(r);
-        const dow = pplWeekday_(r.date_start);
-        pplBucket_(weekdays, dow, { dow: dow }, r);
-      }
+      rowsByCut[cut].push(r);
     });
   });
 
-  const values = function (map) { return Object.keys(map).map(function (k) { return map[k]; }); };
-  // пустые часы и дни — нулями: на графике дыра должна быть видна как ноль
-  const filled = function (map, keys, field) {
-    return keys.map(function (k) {
-      if (map[k]) return map[k];
-      const z = pplZeroMetrics_();
-      z[field] = k;
-      return z;
-    });
-  };
-  // итог — по дневным строкам: у разрезов Meta прячет мелкие ячейки
-  // (например, возраст «неизвестен»), и их суммы чуть меньше настоящих
-  const totals = pplZeroMetrics_();
-  dayRows.forEach(function (r) { pplAddMetrics_(totals, r); });
+  const adIds = {};
+  rowsByCut.forEach(function (rows) { rows.forEach(function (r) { adIds[r.ad_id] = true; }); });
+  const map = pplIgProfileMap_(Object.keys(adIds));
+  const offsets = {};
+  accts.forEach(function (a) { offsets[a] = (tz[a] || {}).offset; });
+  const groups = pplAudienceGroups_(rowsByCut, map.actorByAd, offsets);
+
+  const all = groups['*'];
+  const profiles = Object.keys(groups).filter(function (k) { return k !== '*'; }).map(function (k) {
+    const g = groups[k];
+    g.profile = g.profile_id ? (map.names[g.profile_id] || g.profile_id) : '(профиль не определён)';
+    return g;
+  }).sort(function (a, b) { return b.totals.spend - a.totals.spend; });
 
   const out = {
     view: 'audience',
@@ -2458,16 +2448,17 @@ function pplBuildAudience(params) {
     updated: new Date().toISOString(),
     currency: currency,
     mixed_currency: mixed,
-    totals: totals,
-    age_gender: values(ageGender).sort(pplAgeGenderOrder_),
-    placements: values(places).sort(function (a, b) { return b.spend - a.spend; }),
-    hours: hourRows ? filled(hours, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-      17, 18, 19, 20, 21, 22, 23], 'hour') : [],
-    hours_missing: !hourRows && !hoursFailed && totals.spend > 0,
+    // «все вместе» — на верхнем уровне, как и раньше; по профилям — в profiles
+    totals: all.totals,
+    age_gender: all.age_gender,
+    placements: all.placements,
+    hours: all.hours,
+    hours_missing: !all.hours.length && !hoursFailed && all.totals.spend > 0,
     hours_failed: hoursFailed,
-    weekdays: filled(weekdays, [1, 2, 3, 4, 5, 6, 7], 'dow'),
+    weekdays: all.weekdays,
+    profiles: profiles,
     tz: accts.map(function (a) { return tz[a] || null; }),
-    msg_types: pplMsgTypes_(dayRows),
+    msg_types: pplMsgTypes_(rowsByCut[3]),
     partial: partial
   };
   try {
@@ -2475,6 +2466,90 @@ function pplBuildAudience(params) {
     if (!partial && json.length < 100000) cache.put(cacheKey, json, 600);
   } catch (e) {}
   return out;
+}
+
+/**
+ * Строки разрезов по объявлениям → группы: '*' — все вместе, дальше по
+ * профилю объявления ('?' — профиль не определён). rowsByCut — строки
+ * [возраст×пол, место показа, часы, дни] с полями ad_id и account;
+ * actorByAd — профиль каждого объявления; offsets — пояс кабинета.
+ *
+ * Итог группы — по дневным строкам: у разрезов Meta прячет мелкие ячейки
+ * (например, возраст «неизвестен»), и их суммы чуть меньше настоящих.
+ * Пустые часы и дни — нулями: на графике дыра должна быть видна как ноль.
+ */
+function pplAudienceGroups_(rowsByCut, actorByAd, offsets) {
+  const raw = {};
+  const groupOf = function (key, actor) {
+    if (!raw[key]) {
+      raw[key] = { profile_id: actor, age: {}, place: {}, hours: {}, days: {}, totals: pplZeroMetrics_(), hourRows: 0 };
+    }
+    return raw[key];
+  };
+  groupOf('*', '');
+  const targets = function (r) {
+    const actor = actorByAd[r.ad_id] || '';
+    return [raw['*'], groupOf(actor || '?', actor)];
+  };
+
+  (rowsByCut[0] || []).forEach(function (r) {
+    targets(r).forEach(function (g) {
+      pplBucket_(g.age, r.age + '|' + r.gender, { age: r.age || '', gender: r.gender || '' }, r);
+    });
+  });
+  (rowsByCut[1] || []).forEach(function (r) {
+    targets(r).forEach(function (g) {
+      pplBucket_(g.place, r.publisher_platform + '|' + r.platform_position,
+        { platform: r.publisher_platform || '', position: r.platform_position || '' }, r);
+    });
+  });
+  (rowsByCut[2] || []).forEach(function (r) {
+    const h = pplLocalHour_(r.hourly_stats_aggregated_by_advertiser_time_zone, offsets[r.account]);
+    if (h === null) return;
+    targets(r).forEach(function (g) { g.hourRows++; pplBucket_(g.hours, h, { hour: h }, r); });
+  });
+  (rowsByCut[3] || []).forEach(function (r) {
+    const dow = pplWeekday_(r.date_start);
+    targets(r).forEach(function (g) {
+      pplAddMetrics_(g.totals, r);
+      pplBucket_(g.days, dow, { dow: dow }, r);
+    });
+  });
+
+  const values = function (m) { return Object.keys(m).map(function (k) { return pplRoundSpend_(m[k]); }); };
+  const filled = function (m, keys, field) {
+    return keys.map(function (k) {
+      if (m[k]) return pplRoundSpend_(m[k]);
+      const z = pplZeroMetrics_();
+      z[field] = k;
+      return z;
+    });
+  };
+  const HOURS = [];
+  for (let h = 0; h < 24; h++) HOURS.push(h);
+
+  const out = {};
+  Object.keys(raw).forEach(function (k) {
+    const g = raw[k];
+    out[k] = {
+      profile_id: g.profile_id,
+      totals: pplRoundSpend_(g.totals),
+      age_gender: values(g.age).sort(pplAgeGenderOrder_),
+      placements: values(g.place).sort(function (a, b) { return b.spend - a.spend; }),
+      hours: g.hourRows ? filled(g.hours, HOURS, 'hour') : [],
+      weekdays: filled(g.days, [1, 2, 3, 4, 5, 6, 7], 'dow')
+    };
+  });
+  return out;
+}
+
+/**
+ * Расход до центов: сумма float-ов даёт 12.340000000000002, и такие
+ * хвосты в сотнях строк разрезов зря съедали место под потолком кэша.
+ */
+function pplRoundSpend_(row) {
+  row.spend = Math.round(Number(row.spend || 0) * 100) / 100;
+  return row;
 }
 
 /** Накопитель разреза: строка на ключ, метрики складываются. */

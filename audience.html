@@ -38,6 +38,13 @@
   .controls .custom-period{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:#666;margin-left:8px}
   .controls .custom-period input{padding:7px 10px;border:1px solid #ddd;border-radius:999px;font:inherit;font-size:13px;background:#fff}
 
+  .profiles{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:-2px 0 18px}
+  .profiles .lbl{font-size:12.5px;color:var(--ink2);margin-right:2px}
+  .profiles button{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:7px 14px;cursor:pointer;color:var(--ink)}
+  .profiles button small{color:var(--ink2);font-size:11px;margin-left:4px}
+  .profiles button.active{background:var(--yellow);border-color:var(--yellow)}
+  .profiles button.active small{color:var(--ink)}
+
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
   .card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:16px 18px}
   .card .k{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);font-weight:600}
@@ -85,7 +92,7 @@
   @media print{
     @page{size:A4 landscape;margin:12mm}
     body{background:#fff}
-    #gate,.controls,nav.dashnav,.brand{display:none !important}
+    #gate,.controls,.profiles,nav.dashnav,.brand{display:none !important}
     .topbar{padding:0}
     #updated{margin-left:0;font-size:11px}
     .pagehead{padding:0 0 6px}
@@ -149,6 +156,7 @@
   <div id="status">Загрузка…</div>
 
   <div id="content" style="display:none">
+    <div class="profiles" id="profileBar"></div>
     <div class="cards" id="cards"></div>
     <div id="warn"></div>
 
@@ -239,7 +247,14 @@ const ratio = (a, b) => b ? a / b : null;
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Номер последнего запроса. Период переключают, не дождавшись ответа, и
+// опоздавший ответ прошлого периода перерисовывал страницу поверх нового:
+// нажата «90 дней», а цифры за этот месяц.
+let reqSeq = 0;
+let lastD = null;
+
 async function loadData(fresh) {
+  const my = ++reqSeq;
   const status = document.getElementById('status');
   const content = document.getElementById('content');
   status.style.display = 'block'; status.className = ''; status.textContent = 'Загрузка…';
@@ -248,6 +263,7 @@ async function loadData(fresh) {
     const r = periodRange();
     const d = await api('view=daily&part=audience&since=' + r.since + '&until=' + r.until +
       (fresh ? '&nocache=1' : ''));
+    if (my !== reqSeq) return;
     // старое развёртывание про part=audience не знает и молча отдаёт дни
     if (!d || d.view !== 'audience') {
       throw new Error('Бэкенд не отдаёт «Аудиторию» — обновите развёртывание Apps Script.');
@@ -256,9 +272,56 @@ async function loadData(fresh) {
     status.style.display = 'none';
     content.style.display = 'block';
   } catch (err) {
+    if (my !== reqSeq) return;
     status.className = 'error';
     status.textContent = 'Ошибка: ' + err.message;
   }
+}
+
+/* ---------- профили ---------- */
+
+// В «Детали» пишут одни люди, в CODDY, «Прознание» и «Уикенд» — другие:
+// смешанная таблица врёт про всех сразу. Поэтому по умолчанию — профиль с
+// самым большим расходом, выбор запоминается в этом браузере.
+const PROFILE_KEY = 'fb_dash_aud_profile';
+let profileSel = null;
+try { profileSel = localStorage.getItem(PROFILE_KEY); } catch (e) {}
+const profileKey = p => p.profile_id || '?';
+
+/** Профиль по-человечески: «@coddy.mogilev» → CODDY. Незнакомый — как есть. */
+function profileLabel(p) {
+  if (!p.profile_id) return 'Профиль не определён';
+  const s = String(p.profile || '').toLowerCase();
+  if (/coddy|кодди/.test(s)) return 'CODDY';
+  if (/detal|детал/.test(s)) return 'Детали';
+  if (/weekend|уикенд|kanikul|каникул/.test(s)) return 'Уикенд';
+  if (/proznan|прознан/.test(s)) return 'Прознание';
+  return p.profile || p.profile_id;
+}
+
+/** Выбранный профиль или null — «все вместе» (и у старого бэкенда без профилей). */
+function pickGroup(d) {
+  const list = d.profiles || [];
+  if (!list.length || profileSel === '*') return null;
+  return list.find(p => profileKey(p) === profileSel) || list[0];
+}
+
+function renderProfileBar(d, g) {
+  const bar = document.getElementById('profileBar');
+  const list = d.profiles || [];
+  if (!list.length) { bar.innerHTML = ''; return; }
+  const btn = (key, label, spend, active, title) =>
+    '<button data-p="' + esc(key) + '"' + (active ? ' class="active"' : '') +
+    (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(label) +
+    '<small>' + money(spend) + '</small></button>';
+  bar.innerHTML = '<span class="lbl">Профиль:</span>' +
+    list.map(p => btn(profileKey(p), profileLabel(p), p.totals.spend, g === p, p.profile)).join('') +
+    btn('*', 'Все вместе', d.totals.spend, !g, 'Все профили одной таблицей');
+  bar.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    profileSel = b.dataset.p;
+    try { localStorage.setItem(PROFILE_KEY, profileSel); } catch (e) {}
+    render(lastD);
+  }));
 }
 
 /* ---------- подписи ---------- */
@@ -298,18 +361,19 @@ const hasType = (d, frag) => (d.msg_types || []).some(t => t.indexOf(frag) !== -
 const MIN_MSG = 3;          // меньше переписок в строке — цена случайная
 const GOOD = 0.8, BAD = 1.25;
 
-function columns(d) {
-  const avg = ratio(d.totals.spend, d.totals.messages);
+/** Колонки таблиц. v — что показываем (профиль или все вместе): от его итога доли и средняя. */
+function columns(d, v) {
+  const avg = ratio(v.totals.spend, v.totals.messages);
   const cols = [
     { h: 'Потрачено', v: x => money(x.spend) },
-    { h: 'Доля<br>расхода', v: x => pct(ratio(x.spend, d.totals.spend)) },
+    { h: 'Доля<br>расхода', v: x => pct(ratio(x.spend, v.totals.spend)) },
     { h: 'Показов', v: x => fmtInt(x.impressions) },
     { h: 'CTR', v: x => pct(ratio(x.link_clicks, x.impressions)) },
     { h: 'Сообщений', v: x => fmtInt(x.messages) },
-    { h: 'Доля<br>сообщений', v: x => pct(ratio(x.messages, d.totals.messages)) },
+    { h: 'Доля<br>сообщений', v: x => pct(ratio(x.messages, v.totals.messages)) },
     { h: 'Цена<br>сообщ.', v: x => money(ratio(x.spend, x.messages)), cls: x => costClass(x, avg) }
   ];
-  if (hasField(d, 'new_chats')) {
+  if (hasField(v, 'new_chats')) {
     cols.push({ h: 'Из них<br>новых', v: x => share(x.new_chats, x.messages),
       t: 'Написали бизнесу впервые; остальные писали и раньше — часто это действующие клиенты' });
   }
@@ -317,7 +381,7 @@ function columns(d) {
     cols.push({ h: 'Написали<br>3+ раз', v: x => share(x.depth3, x.messages),
       t: 'Сколько человек отправили три сообщения и больше' });
   }
-  if (hasField(d, 'blocks')) {
+  if (hasField(v, 'blocks')) {
     cols.push({ h: 'Заблоки-<br>ровали', v: x => fmtInt(x.blocks),
       t: 'Сколько человек после рекламы заблокировали аккаунт' });
   }
@@ -385,20 +449,26 @@ function verdict(d, rows, label) {
 /* ---------- страница ---------- */
 
 function render(d) {
+  lastD = d;
   CUR = d.currency || 'USD';
-  document.getElementById('updated').textContent =
-    d.since + ' — ' + d.until + ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
+  const g = pickGroup(d);
+  // v — что показываем: выбранный профиль или все вместе
+  const v = g || d;
+  renderProfileBar(d, g);
+  document.getElementById('updated').textContent = d.since + ' — ' + d.until +
+    (g ? ' · ' + profileLabel(g) : (d.profiles || []).length ? ' · все профили' : '') +
+    ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
 
-  const t = d.totals;
+  const t = v.totals;
   const cards = [
     card('Потрачено', money(t.spend), fmtInt(t.impressions) + ' показов'),
     card('Сообщений', fmtInt(t.messages), 'цена сообщения ' + money(ratio(t.spend, t.messages)))
   ];
-  if (hasField(d, 'new_chats')) {
+  if (hasField(v, 'new_chats')) {
     cards.push(card('Из них новых', t.messages ? Math.round(t.new_chats / t.messages * 100) + '%' : '—',
       fmtInt(t.new_chats) + ' написали впервые, остальные — вернувшиеся'));
   }
-  if (hasField(d, 'blocks')) {
+  if (hasField(v, 'blocks')) {
     cards.push(card('Заблокировали', fmtInt(t.blocks),
       t.messages ? 'на 100 переписок — ' + (t.blocks / t.messages * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : 'после рекламы'));
   }
@@ -410,17 +480,17 @@ function render(d) {
   document.getElementById('warn').innerHTML = warns.length
     ? '<div class="block"><div class="note warn">⚠ ' + warns.join('<br>⚠ ') + '</div></div>' : '';
 
-  const cols = columns(d);
-  table('ageHead', 'ageBody', 'Кто', d.age_gender, ageGenderLabel, cols, t);
-  document.getElementById('ageNote').innerHTML = verdict(d, d.age_gender, ageGenderLabel);
+  const cols = columns(d, v);
+  table('ageHead', 'ageBody', 'Кто', v.age_gender, ageGenderLabel, cols, t);
+  document.getElementById('ageNote').innerHTML = verdict(v, v.age_gender, ageGenderLabel);
 
-  table('placeHead', 'placeBody', 'Где', d.placements, placeLabel, cols, t);
-  document.getElementById('placeNote').innerHTML = verdict(d, d.placements, placeLabel);
+  table('placeHead', 'placeBody', 'Где', v.placements, placeLabel, cols, t);
+  document.getElementById('placeNote').innerHTML = verdict(v, v.placements, placeLabel);
 
-  renderHours(d, cols);
+  renderHours(d, v, cols);
 
-  table('dowHead', 'dowBody', 'День', d.weekdays, x => DOW[x.dow], cols, t);
-  document.getElementById('dowNote').innerHTML = verdict(d, d.weekdays, x => DOW[x.dow]) +
+  table('dowHead', 'dowBody', 'День', v.weekdays, x => DOW[x.dow], cols, t);
+  document.getElementById('dowNote').innerHTML = verdict(v, v.weekdays, x => DOW[x.dow]) +
     ' День — по часовому поясу рекламного кабинета.';
 }
 
@@ -434,7 +504,7 @@ function card(k, v, s) {
  * одному часу переписок обычно единицы — таблица по часу была бы шумом,
  * а на графике видно общую форму дня.
  */
-function renderHours(d, cols) {
+function renderHours(d, v, cols) {
   const box = document.getElementById('hoursBox');
   const tz = (d.tz || []);
   const shifted = tz.some(z => z && z.offset !== 3);
@@ -443,6 +513,10 @@ function renderHours(d, cols) {
     ? 'по часовому поясу рекламного кабинета'
     : 'по минскому времени' + (shifted ? ' (пересчитано из пояса кабинета)' : '');
 
+  if ((d.hours || []).length && !(v.hours || []).length) {
+    box.innerHTML = '<div class="note">По этому профилю почасовых данных за период нет.</div>';
+    return;
+  }
   if (!d.hours || !d.hours.length) {
     box.innerHTML = '<div class="note">' + (d.hours_failed
       ? 'Почасовую разбивку Meta в этот раз не отдала — нажмите «Обновить».'
@@ -452,21 +526,21 @@ function renderHours(d, cols) {
     return;
   }
 
-  const t = d.totals;
-  const spendShare = d.hours.map(x => ratio(x.spend, t.spend) || 0);
-  const msgShare = d.hours.map(x => ratio(x.messages, t.messages) || 0);
+  const t = v.totals;
+  const spendShare = v.hours.map(x => ratio(x.spend, t.spend) || 0);
+  const msgShare = v.hours.map(x => ratio(x.messages, t.messages) || 0);
   const max = Math.max(...spendShare, ...msgShare) || 1;
   box.innerHTML =
     '<div class="legend"><span><i style="background:#F3DF94"></i>доля расхода</span>' +
     '<span><i style="background:var(--ink)"></i>доля переписок</span></div>' +
-    '<div class="hours">' + d.hours.map((x, i) =>
+    '<div class="hours">' + v.hours.map((x, i) =>
       '<div class="h" title="' + hh(x.hour) + ':00–' + hh((x.hour + 1) % 24) + ':00 · ' +
         money(x.spend) + ' · ' + fmtInt(x.messages) + ' сообщ.' +
         (x.messages ? ' · ' + money(x.spend / x.messages) + ' за сообщение' : '') + '">' +
         '<div class="sp" style="height:' + (spendShare[i] / max * 100).toFixed(1) + '%"></div>' +
         '<div class="ms" style="height:' + (msgShare[i] / max * 100).toFixed(1) + '%"></div>' +
       '</div>').join('') + '</div>' +
-    '<div class="hlabels">' + d.hours.map(x => '<span>' + (x.hour % 3 === 0 ? hh(x.hour) : '') + '</span>').join('') + '</div>' +
+    '<div class="hlabels">' + v.hours.map(x => '<span>' + (x.hour % 3 === 0 ? hh(x.hour) : '') + '</span>').join('') + '</div>' +
     '<div class="table-scroll"><table><thead id="slotHead"></thead><tbody id="slotBody"></tbody></table></div>' +
     '<div class="note" id="slotNote"></div>';
 
@@ -475,14 +549,14 @@ function renderHours(d, cols) {
   for (let s = 0; s < 24; s += 3) {
     const row = { from: s, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0,
       new_chats: 0, blocks: 0, depth2: 0, depth3: 0 };
-    d.hours.slice(s, s + 3).forEach(x => Object.keys(row).forEach(k => {
+    v.hours.slice(s, s + 3).forEach(x => Object.keys(row).forEach(k => {
       if (k !== 'from') row[k] += x[k] || 0;
     }));
     slots.push(row);
   }
   const slotLabel = x => hh(x.from) + ':00–' + hh((x.from + 3) % 24) + ':00';
   table('slotHead', 'slotBody', 'Время', slots, slotLabel, cols, null);
-  document.getElementById('slotNote').innerHTML = verdict(d, slots, slotLabel) +
+  document.getElementById('slotNote').innerHTML = verdict(v, slots, slotLabel) +
     ' Время — когда человек увидел рекламу и откликнулся на неё.';
 }
 

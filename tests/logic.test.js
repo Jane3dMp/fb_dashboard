@@ -1098,6 +1098,43 @@ test('возраст по порядку, неизвестный в конце, 
   ]);
 });
 
+test('разрезы по профилям: каждое объявление в свой профиль, «все вместе» — сумма', () => {
+  const act = (o) => Object.assign({ account: 'act_1', spend: '10', impressions: '1000',
+    actions: [{ action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '2' }] }, o);
+  const rows = [
+    [act({ ad_id: 'd1', age: '35-44', gender: 'female' }), act({ ad_id: 'c1', age: '35-44', gender: 'female' }),
+     act({ ad_id: 'x9', age: '25-34', gender: 'male' })],
+    [act({ ad_id: 'd1', publisher_platform: 'instagram', platform_position: 'instagram_reels' })],
+    [act({ ad_id: 'c1', hourly_stats_aggregated_by_advertiser_time_zone: '17:00:00 - 17:59:59', account: 'act_2' })],
+    [act({ ad_id: 'd1', date_start: '2026-09-27', spend: '10.1' }), act({ ad_id: 'c1', date_start: '2026-09-28', spend: '20.2' })]
+  ];
+  const g = sandbox.pplAudienceGroups_(rows, { d1: 'DETALI', c1: 'CODDY' }, { act_1: 3, act_2: 0 });
+  assert.deepStrictEqual(Object.keys(g).sort(), ['*', '?', 'CODDY', 'DETALI']);
+  assert.strictEqual(g['*'].totals.spend, 30.3, 'сумма без хвоста float');
+  assert.strictEqual(g.DETALI.totals.spend, 10.1);
+  assert.strictEqual(g.CODDY.totals.messages, 2);
+  assert.strictEqual(g['*'].age_gender.length, 2, 'женщины 35–44 обоих профилей — одна строка');
+  assert.strictEqual(g['*'].age_gender[1].spend, 20);
+  assert.strictEqual(g.DETALI.age_gender.length, 1);
+  assert.strictEqual(g['?'].age_gender[0].gender, 'male', 'объявление без профиля не теряется');
+  assert.strictEqual(g['?'].profile_id, '');
+  assert.strictEqual(g.DETALI.placements[0].position, 'instagram_reels');
+  assert.strictEqual(g.CODDY.placements.length, 0);
+  assert.strictEqual(g.CODDY.hours.length, 24, 'у профиля с часами — все 24 часа');
+  assert.strictEqual(g.CODDY.hours[20].spend, 10, 'кабинет в UTC: 17 ч → 20 ч по Минску');
+  assert.strictEqual(g.DETALI.hours.length, 0, 'у профиля без почасовых строк часов нет');
+  assert.strictEqual(g.DETALI.weekdays[6].dow, 7, 'воскресенье');
+  assert.strictEqual(g.DETALI.weekdays[6].spend, 10.1);
+});
+
+test('разрезы без строк — пустая группа «все вместе», а не падение', () => {
+  const g = sandbox.pplAudienceGroups_([[], [], [], []], {}, {});
+  assert.deepStrictEqual(Object.keys(g), ['*']);
+  assert.strictEqual(g['*'].totals.spend, 0);
+  assert.strictEqual(g['*'].hours.length, 0);
+  assert.strictEqual(g['*'].weekdays.length, 7);
+});
+
 test('строки ответа Meta: нет тела — ok=false, одна страница — все строки', () => {
   const none = graphRows_(null, 5);
   assert.strictEqual(none.ok, false);
