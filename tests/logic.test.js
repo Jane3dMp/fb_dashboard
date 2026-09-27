@@ -1296,6 +1296,66 @@ test('расход по курсам: слитый бюджет виден, об
   assert.strictEqual(by('(курс не определён)').spend, 113, 'МЦО');
 });
 
+console.log('\nДосыпка Direct из истории SendPulse');
+
+const backfillRows_ = sandbox.pplBackfillRows_;
+const spTextHist_ = sandbox.pplSpText_;
+const directCap_ = sandbox.pplDirectCap_;
+const bfSince = Date.parse('2026-09-01T00:00:00+03:00');
+const bfUntil = Date.parse('2026-09-27T09:43:00Z');
+const msg = (iso, text, dir, extra) => Object.assign({ created_at: iso, direction: dir || 1, data: { text } }, extra);
+const contact = { id: 'c1', channel_data: { user_name: 'anna', first_name: 'Анна', last_name: 'К' } };
+
+test('история: первое за неделю, курс вторым сообщением — отдельной строкой', () => {
+  const seen = {};
+  const rows = backfillRows_(contact, [
+    msg('2026-09-10T10:00:00Z', 'Здравствуйте'),
+    msg('2026-09-10T10:00:30Z', 'Ответ бота', 2),
+    msg('2026-09-10T10:01:00Z', 'Английский: сколько стоит?'),
+    msg('2026-09-11T09:00:00Z', 'а в субботу есть?'),
+    msg('2026-09-12T09:00:00Z', 'Английский ещё раз'),
+    msg('2026-09-20T09:00:00Z', 'Снова пишу через 10 дней')
+  ], 'Детский клуб', seen, bfSince, bfUntil);
+  assert.strictEqual(rows.map(r => r[6] || '-').join(' '), '- Английский -');
+  assert.strictEqual(rows[1][7], 'Английский', 'префикс кнопки');
+  assert.strictEqual(rows[0][2], 'Детский клуб');
+  assert.strictEqual(rows[0][4], 'anna');
+  assert.strictEqual(rows[0][5], 'Анна К');
+  assert.strictEqual(rows[0][11], '', 'статус пустой — строку разберёт задача меток');
+});
+
+test('история: вне окна и уже записанное приёмником не дублируется', () => {
+  const seen = { c1: [{ t: Date.parse('2026-09-26T15:31:00Z'), course: 'Английский' }] };
+  const rows = backfillRows_(contact, [
+    msg('2026-08-31T20:00:00Z', 'Английский: август'),            // до 1 сентября по Минску
+    msg('2026-09-25T10:00:00Z', 'Английский: расписание?'),        // приёмник записал его 26.09
+    msg('2026-09-27T10:00:00Z', 'после включения приёмника')       // дальше пишет приёмник
+  ], 'x', seen, bfSince, bfUntil);
+  assert.strictEqual(rows.length, 0);
+});
+
+test('история: ID объявления из referral в data', () => {
+  const rows = backfillRows_(contact, [msg('2026-09-15T10:00:00Z', 'Глина: пробное?', 1,
+    { data: { text: 'Глина: пробное?', referral: { source: 'ADS', ad_id: '1202', ads_context_data: { ad_title: 'Глина' } } } })],
+  'x', {}, bfSince, bfUntil);
+  assert.strictEqual(rows[0][9], '1202');
+  assert.strictEqual(rows[0][10], 'Глина');
+});
+
+test('текст сообщения из data SendPulse — строкой, text.body или глубже', () => {
+  assert.strictEqual(spTextHist_({ text: ' Minecraft ' }), 'Minecraft');
+  assert.strictEqual(spTextHist_({ text: { body: 'Roblox' } }), 'Roblox');
+  assert.strictEqual(spTextHist_({ message: { text: 'Глина' } }), 'Глина');
+  assert.strictEqual(spTextHist_({ attachments: [{ type: 'image' }] }), '');
+});
+
+test('страница получает последних N человек, итог — по всем', () => {
+  const c = directCap_({ amo: 'https://x', rows: [{ ts: '2026-09-01' }, { ts: '2026-09-03' }, { ts: '2026-09-02' }] }, 2);
+  assert.strictEqual(c.total, 3);
+  assert.strictEqual(c.rows.map(r => r.ts).join(' '), '2026-09-03 2026-09-02');
+  assert.strictEqual(c.amo, 'https://x');
+});
+
 test('без строк Direct ядро отдаёт пустой список, остальное не меняется', () => {
   const r = revenueCore_([igLead({})], [], [], '2026-07-01', '2026-07-31');
   assert.strictEqual(r.direct.length, 0);
@@ -1549,6 +1609,13 @@ test('словарь курсов в «ФБ» — точная копия сло
   const ppl = vm.runInContext(dump.replace('%C', 'PPL_COURSES').replace('%K', 'PPL_COMBOS'), sandbox);
   const hook = vm.runInContext(dump.replace('%C', 'SP_COURSES').replace('%K', 'SP_COMBOS'), hookBox);
   assert.strictEqual(ppl, hook, 'курс добавили в один файл, а в другой — нет');
+});
+
+test('префикс и referral в досыпке — как в приёмнике', () => {
+  ['Лепка из природной глины: как записаться?', 'Здравствуйте', 'a: b', ''].forEach(t =>
+    assert.strictEqual(sandbox.pplPrefix_(t), hookBox.spPrefix_(t)));
+  const ev = { info: { message: { channel_data: { message: { referral: { ad_id: '7', ads_context_data: { ad_title: 'T' } } } } } } };
+  assert.strictEqual(JSON.stringify(sandbox.pplSpReferral_(ev)), JSON.stringify(hookBox.spReferral_(ev)));
 });
 
 test('один человек — одна строка за неделю, но строка с курсом важнее', () => {

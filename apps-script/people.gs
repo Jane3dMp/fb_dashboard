@@ -119,6 +119,7 @@ function buildPeople(params) {
   const adStats = pplDirectAdStats_(revenue.direct.rows, spendByAd);
   const ads = pplAggregateByAd_(people, spendByAd, adStats, toAmo);
   revenue.by_course = pplCourseSpend_(revenue.by_course, spendByAd, adStats.courseOf, toAmo);
+  revenue.direct = pplDirectCap_(revenue.direct, PPL_DIRECT_ROWS_MAX);
 
   const out = {
     view: 'people',
@@ -2286,7 +2287,7 @@ function pplAggregateByAd_(people, spendByAd, direct, toAmo) {
  */
 const PPL_DIRECT_SHEET = 'Курсы из Direct';
 const PPL_DIRECT_MAX_TRIES = 12;          // 12 × 10 минут = 2 часа
-const PPL_DIRECT_BATCH = 40;              // строк за запуск — укладываемся в лимит времени
+const PPL_DIRECT_BATCH = 60;              // строк за запуск — укладываемся в лимит времени
 const PPL_DIRECT_BEFORE_MS = 30 * 60000;  // сделка могла появиться чуть раньше вебхука
 const PPL_DIRECT_AFTER_MS = 3 * 3600000;  // …или заметно позже
 const PPL_DIRECT_EVENT_BEFORE_S = 30;     // событие amoCRM обычно на 2–6 с раньше SendPulse
@@ -2297,6 +2298,18 @@ const PPL_DIRECT_EVENT_AFTER_S = 90;      // …или позже, если amoC
  * 10 минут (pplSetupDirectCourseTrigger); можно и руками из редактора.
  */
 function pplTagDirectCourses() {
+  // статус пишется по номеру строки, а досыпка истории (pplBackfillSort_)
+  // сортирует лист — под одним замком они не пересекутся
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    pplTagDirectRows_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function pplTagDirectRows_() {
   const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
   if (!sh || sh.getLastRow() < 2) return;
   const values = sh.getDataRange().getValues();
@@ -2536,6 +2549,20 @@ function pplSetupDirectCourseTrigger() {
 
 /** Сколько символов первого сообщения отдаём странице: текст кнопки влезает. */
 const PPL_DIRECT_TEXT_MAX = 90;
+/** Сколько последних людей отдаём странице: ответ должен влезать в кэш (100 КБ). */
+const PPL_DIRECT_ROWS_MAX = 300;
+
+/**
+ * Таблица на странице — последние max человек: после досыпки истории их
+ * сотни, и ответ перестал бы кэшироваться. Цифры по объявлениям и курсам
+ * считаются до обрезки, по всем. Чистая функция.
+ */
+function pplDirectCap_(dir, max) {
+  const rows = ((dir && dir.rows) || []).slice().sort(function (a, b) {
+    return String(b.ts).localeCompare(String(a.ts));
+  });
+  return { amo: (dir && dir.amo) || '', total: rows.length, rows: rows.slice(0, max) };
+}
 
 /**
  * Строки листа за период (по дате сообщения) вместе с состоянием сделок.
@@ -2830,6 +2857,245 @@ function pplFetchPipelineStages_(base, auth) {
     out[p.id] = { name: p.name, statuses: st };
   });
   return out;
+}
+
+/* ============ 4d. Досыпка Direct из истории SendPulse ============ */
+
+/*
+ * Приёмник SendPulse пишет людей с 26.09.2026 (с 27.09 — все новые
+ * переписки, до того — только назвавших курс), а путь клиента хочется
+ * видеть с начала сентября. История лежит в SendPulse: официальный API
+ * отдаёт чаты бота и сообщения переписки. Ключ — свойство SP_API_KEY
+ * (SendPulse → настройки → «Доступ к API» → «Ключи API»; «Учётные данные»
+ * не перевыпускать — это ломает другие интеграции).
+ *
+ * pplBackfillDirect один раз проходит по четырём Instagram-ботам и
+ * дописывает в «Курсы из Direct» строки, какие записал бы приёмник: одна
+ * на человека за 7 дней, строка с курсом — отдельно, уже записанное не
+ * дублируется. Разбирает их, как обычно, pplTagDirectCourses. Работает
+ * порциями: у запуска 6 минут, продолжение ставит сама.
+ */
+const PPL_SP_API = 'https://api.sendpulse.com/instagram';
+/** Instagram-боты SendPulse и подпись аккаунта для колонки bot. */
+const PPL_SP_BOTS = [
+  ['64e4355ab7138e627609350c', 'CODDY'],
+  ['64e661577d31afbfb300e889', 'Детский клуб'],
+  ['67a08b2f91bc4d9e45035fc8', 'Прознание (каникулы)'],
+  ['69da155b4228b00c1c03d2a1', 'Детали']
+];
+const PPL_BACKFILL_SINCE = '2026-09-01T00:00:00+03:00';
+/** С этой минуты всех новых пишет приёмник (IG webhook, версия 3). */
+const PPL_BACKFILL_UNTIL = '2026-09-27T09:43:00Z';
+const PPL_BACKFILL_KEY = 'DIRECT_BACKFILL';
+const PPL_BACKFILL_RAW = 'SendPulse: история, образцы';
+const PPL_BACKFILL_BUDGET_MS = 3.5 * 60000;
+const PPL_BACKFILL_MAX_RUNS = 20;
+const PPL_SP_PAGE = 50;
+
+/** Досыпка с начала. Запустить один раз из редактора; продолжение поставит сама. */
+function pplBackfillDirect() { pplBackfillStep_(true); }
+
+/** Продолжение досыпки — его ставит и снимает сама досыпка. */
+function pplBackfillDirectNext() { pplBackfillStep_(false); }
+
+function pplBackfillStep_(fresh) {
+  const t0 = Date.now();
+  const props = PropertiesService.getScriptProperties();
+  let job = null;
+  try { job = JSON.parse(props.getProperty(PPL_BACKFILL_KEY) || 'null'); } catch (e) { job = null; }
+  if (fresh || !job) job = { bot: 0, skip: 0, rows: 0, runs: 0, done: false };
+  pplBackfillDropNext_();
+  if (job.done) return;
+  job.runs++;
+  if (job.runs > PPL_BACKFILL_MAX_RUNS) {
+    job.done = true;
+    props.setProperty(PPL_BACKFILL_KEY, JSON.stringify(job));
+    throw new Error('Досыпка Direct не уложилась в ' + PPL_BACKFILL_MAX_RUNS + ' запусков');
+  }
+  // продолжение — сразу: оборвёт лимит времени, триггер уже стоит
+  ScriptApp.newTrigger('pplBackfillDirectNext').timeBased().after(7 * 60000).create();
+
+  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('SP_API_KEY') }, muteHttpExceptions: true };
+  const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
+  const seen = pplBackfillSeen_(sh);
+  const since = Date.parse(PPL_BACKFILL_SINCE);
+  const until = Date.parse(PPL_BACKFILL_UNTIL);
+  const samples = [];
+
+  while (job.bot < PPL_SP_BOTS.length && Date.now() - t0 < PPL_BACKFILL_BUDGET_MS) {
+    const bot = PPL_SP_BOTS[job.bot];
+    const chats = pplSpGet_(PPL_SP_API + '/chats?bot_id=' + bot[0] + '&size=' + PPL_SP_PAGE + '&skip=' + job.skip, auth) || [];
+    const rows = [];
+    chats.forEach(function (chat) {
+      const c = chat.contact || {};
+      if (!c.id || Date.parse(c.last_activity_at || '') < since) return;
+      const msgs = pplSpMessages_(c.id, since, auth);
+      if (samples.length < 10) msgs.slice(0, 2).forEach(function (m) { samples.push(m); });
+      pplBackfillRows_(c, msgs, bot[1], seen, since, until).forEach(function (r) { rows.push(r); });
+    });
+    pplBackfillAppend_(sh, rows);
+    job.rows += rows.length;
+    if (chats.length < PPL_SP_PAGE) { job.bot++; job.skip = 0; } else { job.skip += PPL_SP_PAGE; }
+    props.setProperty(PPL_BACKFILL_KEY, JSON.stringify(job));
+  }
+  if (job.runs === 1 && samples.length) pplBackfillSamples_(samples);
+  if (job.bot >= PPL_SP_BOTS.length) {
+    pplBackfillSort_(sh);
+    job.done = true;
+    props.setProperty(PPL_BACKFILL_KEY, JSON.stringify(job));
+    pplBackfillDropNext_();
+  }
+  Logger.log('Досыпка Direct: запуск ' + job.runs + ', бот ' + Math.min(job.bot + 1, PPL_SP_BOTS.length) +
+    ' из ' + PPL_SP_BOTS.length + (job.done ? ' — готово' : ', продолжение через 7 минут') +
+    ', строк дописано всего ' + job.rows + ', ' + Math.round((Date.now() - t0) / 1000) + ' с');
+}
+
+/** Снять триггеры продолжения досыпки. */
+function pplBackfillDropNext_() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pplBackfillDirectNext') ScriptApp.deleteTrigger(t);
+  });
+}
+
+/** GET к API SendPulse — поле data ответа; 429 и 5xx — подождать и повторить. */
+function pplSpGet_(url, auth) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const resp = UrlFetchApp.fetch(url, auth);
+    const code = resp.getResponseCode();
+    if (code === 200) {
+      const j = JSON.parse(resp.getContentText());
+      return j && j.data !== undefined ? j.data : j;
+    }
+    if (code === 429 || code >= 500) { Utilities.sleep(2000 * (attempt + 1)); continue; }
+    throw new Error('SendPulse ' + code + ': ' + pplBriefBody_(resp.getContentText()));
+  }
+  throw new Error('SendPulse не ответил после повторов: ' + url.split('?')[0]);
+}
+
+/**
+ * Сообщения переписки. Порядок в ответе API не обещан: листаем страницами,
+ * пока страница неполная или (если свежие идут первыми) не ушли раньше since.
+ */
+function pplSpMessages_(contactId, since, auth) {
+  const out = [];
+  for (let skip = 0; skip < 3000; skip += 100) {
+    const page = pplSpGet_(PPL_SP_API + '/chats/messages?contact_id=' + contactId + '&size=100&skip=' + skip, auth) || [];
+    page.forEach(function (m) { out.push(m); });
+    if (page.length < 100) break;
+    const first = Date.parse(page[0].created_at), last = Date.parse(page[page.length - 1].created_at);
+    if (first >= last && last < since) break;
+  }
+  return out;
+}
+
+/**
+ * Строки листа по одному человеку: его входящие за [since, until) по
+ * порядку и по правилам приёмника — первое за 7 дней, строка с курсом
+ * отдельно. Уже записанное (seen: contact_id → [{ t, course }]) в пределах
+ * 7 дней в любую сторону не дублируем, а новые строки кладём туда же.
+ * Чистая функция, кроме seen.
+ */
+function pplBackfillRows_(contact, msgs, botName, seen, since, until) {
+  const id = String(contact.id);
+  const cd = contact.channel_data || {};
+  const name = String(cd.name || [cd.first_name, cd.last_name].filter(Boolean).join(' ') || '');
+  const mine = seen[id] || (seen[id] = []);
+  const week = 7 * 86400000;
+  const out = [];
+  (msgs || []).filter(function (m) { return Number(m.direction) === 1; })
+    .map(function (m) { return { t: Date.parse(m.created_at), data: m.data }; })
+    .filter(function (x) { return x.t >= since && x.t < until; })
+    .sort(function (a, b) { return a.t - b.t; })
+    .forEach(function (x) {
+      const text = pplSpText_(x.data);
+      const course = pplCourseOf_(text);
+      if (mine.some(function (s) { return Math.abs(s.t - x.t) < week && (!course || s.course); })) return;
+      const ref = pplSpReferral_(x.data);
+      mine.push({ t: x.t, course: course });
+      out.push([new Date(x.t).toISOString(), 'instagram', botName, id, String(cd.user_name || ''), name,
+        course, pplPrefix_(text), text.slice(0, 500), ref.ad_id || '', ref.ad_title || '', '', '', 0]);
+    });
+  return out;
+}
+
+/** Текст сообщения из data SendPulse: первое поле text (строкой или text.body). Чистая функция. */
+function pplSpText_(data) {
+  let found = '';
+  (function walk(o, depth) {
+    if (found || !o || typeof o !== 'object' || depth > 5) return;
+    if (typeof o.text === 'string' && o.text.trim()) { found = o.text.trim(); return; }
+    if (o.text && typeof o.text.body === 'string' && o.text.body.trim()) { found = o.text.body.trim(); return; }
+    Object.keys(o).forEach(function (k) { walk(o[k], depth + 1); });
+  })(data, 0);
+  return found;
+}
+
+/** Referral рекламы — точь-в-точь spReferral_ из webhook.gs. Чистая функция. */
+function pplSpReferral_(ev) {
+  let found = null;
+  (function walk(o, depth) {
+    if (found || !o || typeof o !== 'object' || depth > 8) return;
+    if (o.ad_id) { found = o; return; }
+    Object.keys(o).forEach(function (k) { walk(o[k], depth + 1); });
+  })(ev, 0);
+  if (!found) return {};
+  const ctx = found.ads_context_data || {};
+  return { ad_id: String(found.ad_id), ad_title: String(ctx.ad_title || found.ad_title || '') };
+}
+
+/** Текст до двоеточия — точь-в-точь spPrefix_ из webhook.gs. Чистая функция. */
+function pplPrefix_(text) {
+  const s = String(text || '');
+  const i = s.indexOf(':');
+  return i > 0 && i <= 60 ? s.slice(0, i).trim() : '';
+}
+
+/** Кто уже есть в листе: contact_id → [{ t, course }]. */
+function pplBackfillSeen_(sh) {
+  const seen = {};
+  if (!sh || sh.getLastRow() < 2) return seen;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues().forEach(function (r) {
+    const t = new Date(r[0]).getTime();
+    if (!t) return;
+    const id = String(r[3]);
+    (seen[id] = seen[id] || []).push({ t: t, course: String(r[6] || '') });
+  });
+  return seen;
+}
+
+/**
+ * Дописать строки по одной: приёмник — другой проект со своим замком — пишет
+ * в тот же лист, и пачка в «последнюю строку» могла бы затереть его строку.
+ */
+function pplBackfillAppend_(sh, rows) {
+  rows.forEach(function (r) { sh.appendRow(r); });
+}
+
+/**
+ * Досыпанные строки встали в конец листа, а приёмник ищет повторы, идя от
+ * конца, и рассчитывает на хронологию — сортируем по времени. Под замком:
+ * pplTagDirectCourses пишет статус по номеру строки.
+ */
+function pplBackfillSort_(sh) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+  try {
+    const last = sh.getLastRow();
+    if (last > 2) sh.getRange(2, 1, last - 1, sh.getLastColumn()).sort({ column: 1, ascending: true });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Первые сообщения первого запуска как есть — сверить формат API с кодом. */
+function pplBackfillSamples_(samples) {
+  const ss = SpreadsheetApp.openById(pplProp_('SHEET_ID'));
+  const sh = ss.getSheetByName(PPL_BACKFILL_RAW) || ss.insertSheet(PPL_BACKFILL_RAW);
+  sh.clearContents();
+  sh.appendRow(['created_at', 'direction', 'data']);
+  samples.forEach(function (m) {
+    sh.appendRow([String(m.created_at || ''), String(m.direction || ''), JSON.stringify(m.data || m).slice(0, 5000)]);
+  });
 }
 
 /* ==================== Утилиты ==================== */

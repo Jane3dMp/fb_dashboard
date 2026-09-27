@@ -740,7 +740,8 @@ function renderDirect(r) {
   const clients = rows.filter(p => p.client).length;
   const paid = rows.filter(p => p.revenue > 0).length;
   document.getElementById('directNote').innerHTML =
-    `Написали: <b>${fmtInt(rows.length)}</b>, из них уже были в amoCRM — ${fmtInt(clients)},
+    `Написали: <b>${fmtInt(Math.max(dir.total || 0, rows.length))}</b>${dir.total > all.length ? ` (в таблице — последние ${fmtInt(rows.length)}, цифры ниже — по ним)` : ''},
+     из них уже были в amoCRM — ${fmtInt(clients)},
      заплатили — ${fmtInt(paid)}. В таблице все, кто начал новую переписку, и все, кто назвал
      курс в первом сообщении (обычно это текст кнопки из рекламы); текущие разговоры старых
      контактов без курса не показываем. «Где сейчас» — этап сделки в amoCRM, у отказа —
