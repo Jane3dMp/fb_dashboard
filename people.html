@@ -43,7 +43,8 @@
   .controls .custom-period{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:#666;margin-left:8px}
   .controls .custom-period input{padding:7px 10px;border:1px solid #ddd;border-radius:999px;font:inherit;font-size:13px;background:#fff}
   details.paid summary{cursor:pointer;font-weight:600;padding:10px 0;user-select:none}
-  .controls .right{margin-left:auto;color:var(--ink2)}
+  .controls .right{margin-left:auto}
+  .controls .view{color:var(--ink2)}
 
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:26px}
   .kpi{background:var(--card);border-radius:20px;padding:20px 22px;box-shadow:var(--shadow)}
@@ -53,8 +54,18 @@
   .kpi.main{background:var(--yellow-soft)}
   .kpi.green .value{color:var(--green)}
 
-  .block{background:var(--card);border-radius:22px;padding:24px;margin-bottom:24px;box-shadow:var(--shadow)}
-  .block h2{font-family:'Poppins',sans-serif;font-size:16px;font-weight:600;margin-bottom:18px}
+  .block{background:var(--card);border-radius:22px;padding:0 24px;margin-bottom:24px;box-shadow:var(--shadow)}
+  .block[open]{padding-bottom:24px}
+  .block:not([open]){margin-bottom:12px}
+  .block h2{font-family:'Poppins',sans-serif;font-size:16px;font-weight:600;flex:1}
+  /* блок сворачивается по клику на заголовок, стрелка справа */
+  .block>summary{list-style:none;cursor:pointer;user-select:none;display:flex;align-items:center;gap:12px;padding:20px 0}
+  .block>summary::-webkit-details-marker{display:none}
+  .block>summary::after{content:'';width:7px;height:7px;border-right:2px solid var(--ink2);border-bottom:2px solid var(--ink2);transform:translateY(-2px) rotate(45deg);transition:transform .15s}
+  .block>summary:hover::after{border-color:var(--ink)}
+  .block>summary:focus-visible{outline:2px solid var(--blue);outline-offset:4px;border-radius:6px}
+  .block[open]>summary{padding-bottom:18px}
+  .block[open]>summary::after{transform:translateY(2px) rotate(-135deg)}
 
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
@@ -99,7 +110,9 @@
     .pagehead h1{font-size:20px}
     .wrap{max-width:none;padding:0}
     .block,.kpi{box-shadow:none;border:1px solid #ddd}
-    .block{page-break-inside:auto;padding:12px;border-radius:8px}
+    .block,.block[open]{page-break-inside:auto;padding:12px;border-radius:8px}
+    .block>summary,.block[open]>summary{padding:0 0 8px}
+    .block>summary::after{display:none}
     .kpis{grid-template-columns:repeat(6,1fr);gap:6px}
     .kpi{padding:8px}.kpi .value{font-size:18px}
     table{font-size:10px}
@@ -151,7 +164,8 @@
     </span>
     <button id="btnFresh" title="Пересчитать прямо сейчас, минуя кэш: свежие заявки и платежи подтягиваются из CRM">⟳ Обновить сейчас</button>
     <button id="btnPdf" title="Сохранить то, что сейчас на экране, в PDF (в диалоге печати выберите «Сохранить как PDF»)">⤓ PDF</button>
-    <button class="right" id="btnNames">Показать имена</button>
+    <button class="right view" id="btnBlocks" title="Раскрыть или свернуть все блоки ниже">Развернуть всё</button>
+    <button class="view" id="btnNames">Показать имена</button>
   </div>
 
   <div id="status">Загрузка…</div>
@@ -168,8 +182,8 @@
 
     <div id="channelNote"></div>
 
-    <div class="block">
-      <h2>По источникам заявок</h2>
+    <details class="block" id="sourcesBlock">
+      <summary><h2>По источникам заявок</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -179,10 +193,10 @@
           <tbody id="sourcesBody"></tbody>
         </table>
       </div>
-    </div>
+    </details>
 
-    <div class="block">
-      <h2>Окупаемость по направлениям</h2>
+    <details class="block" id="revenueBlock">
+      <summary><h2>Окупаемость по направлениям</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -207,10 +221,10 @@
           </table>
         </div>
       </details>
-    </div>
+    </details>
 
-    <div class="block">
-      <h2>Направления: куда пришли заявки из Instagram</h2>
+    <details class="block" id="pipelinesBlock">
+      <summary><h2>Направления: куда пришли заявки из Instagram</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -220,10 +234,10 @@
           <tbody id="pipelinesBody"></tbody>
         </table>
       </div>
-    </div>
+    </details>
 
-    <div class="block" id="coursesBlock" style="display:none">
-      <h2>Курс из первого сообщения в Direct</h2>
+    <details class="block" id="coursesBlock" style="display:none">
+      <summary><h2>Курс из первого сообщения в Direct</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -234,10 +248,10 @@
         </table>
       </div>
       <div class="note" id="coursesNote"></div>
-    </div>
+    </details>
 
-    <div class="block" id="directBlock" style="display:none">
-      <h2>Кто написал в Direct</h2>
+    <details class="block" id="directBlock" style="display:none">
+      <summary><h2>Кто написал в Direct</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -248,10 +262,10 @@
         </table>
       </div>
       <div class="note" id="directNote"></div>
-    </div>
+    </details>
 
-    <div class="block">
-      <h2>Расход по Instagram-профилям</h2>
+    <details class="block" id="profilesBlock">
+      <summary><h2>Расход по Instagram-профилям</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -261,12 +275,11 @@
         </table>
       </div>
       <div id="profilesNote"></div>
-    </div>
+    </details>
 
-    <div id="matchNote"></div>
-
-    <div class="block">
-      <h2>По объявлениям</h2>
+    <details class="block" id="adsBlock">
+      <summary><h2>По объявлениям</h2></summary>
+      <div id="matchNote"></div>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -276,10 +289,10 @@
           <tbody id="adsBody"></tbody>
         </table>
       </div>
-    </div>
+    </details>
 
-    <div class="block" id="peopleBlock">
-      <h2>Люди</h2>
+    <details class="block" id="peopleBlock">
+      <summary><h2>Люди</h2></summary>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -288,7 +301,7 @@
           <tbody id="peopleBody"></tbody>
         </table>
       </div>
-    </div>
+    </details>
   </div>
 </div>
 
@@ -332,6 +345,44 @@ window.addEventListener('afterprint', () => {
   openedForPrint = [];
 });
 document.getElementById('btnPdf').addEventListener('click', () => window.print());
+
+/**
+ * Блоки сворачиваются по клику на заголовок: страница длинная, а смотрят
+ * обычно один-два блока. Какие открыты — помним в этом браузере; впервые
+ * страница открывается со свёрнутыми: видны цифры сверху и заголовки.
+ */
+const OPEN_BLOCKS_KEY = 'fb_dash_people_open';
+const blocks = [...document.querySelectorAll('details.block')];
+const btnBlocks = document.getElementById('btnBlocks');
+// курсы, Direct и «Люди» прячутся целиком, когда им нечего показать
+const shownBlocks = () => blocks.filter(b => b.style.display !== 'none');
+
+function syncBlocksButton() {
+  const shown = shownBlocks();
+  btnBlocks.textContent = shown.length && shown.every(b => b.open) ? 'Свернуть всё' : 'Развернуть всё';
+}
+
+try {
+  const open = JSON.parse(localStorage.getItem(OPEN_BLOCKS_KEY) || '[]');
+  blocks.forEach(b => { b.open = open.includes(b.id); });
+} catch (e) {}
+syncBlocksButton();
+
+// toggle не всплывает — слушаем каждый блок. Сохраняем состояние всех
+// блоков разом, а не одного: раскрытие для печати откатывается afterprint,
+// и последним сохранится уже откаченное
+blocks.forEach(b => b.addEventListener('toggle', () => {
+  syncBlocksButton();
+  try {
+    localStorage.setItem(OPEN_BLOCKS_KEY, JSON.stringify(blocks.filter(x => x.open).map(x => x.id)));
+  } catch (e) {}
+}));
+
+btnBlocks.addEventListener('click', () => {
+  const shown = shownBlocks();
+  const open = !shown.every(b => b.open);
+  shown.forEach(b => { b.open = open; });
+});
 
 document.getElementById('btnNames').addEventListener('click', () => {
   showNames = !showNames;
@@ -517,6 +568,8 @@ function render() {
       <td><span class="approx" title="Как сделка связана с кликом">${MATCH_LABEL[p.matched]}</span></td>`;
     peopleBody.appendChild(tr);
   });
+  // набор видимых блоков мог смениться — подпись «Развернуть/Свернуть всё» тоже
+  syncBlocksButton();
 }
 
 /** Окупаемость канала целиком: расход в Instagram против заявок с этим источником. */
