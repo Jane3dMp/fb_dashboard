@@ -2245,8 +2245,10 @@ function pplAggregateByAd_(people, spendByAd) {
  * Лист «Курсы из Direct» заполняет webhook.gs по вебхуку SendPulse: кто
  * написал (ник и имя в Instagram), когда и какой курс назван в первом
  * сообщении, а если переписка пришла из рекламы — ещё и ID объявления.
+ * С 27.09.2026 там строка на каждого, кто написал, и с курсом, и без.
  * Здесь находим сделку этого человека в amoCRM и кладём курс в поле
- * utm_campaign (плюс тег «курс: …»), а ID объявления — в utm_content.
+ * utm_campaign (плюс тег «курс: …»), а ID объявления — в utm_content; для
+ * строки без курса только запоминаем, новая ли это переписка (no_course).
  * Дальше это едет в дашборд обычной выгрузкой RAW_leads и живой дельтой —
  * отдельного пути не нужно.
  *
@@ -2315,7 +2317,9 @@ function pplTagDirectCourses() {
 /** Одна строка: найти сделку и поставить метку. */
 function pplTagOneDirect_(msg, base, token) {
   if (msg.service && msg.service !== 'instagram') return { status: 'skip_service' };
-  if ((!msg.course && !msg.ad_id) || !msg.ts) return { status: 'skip_empty' };
+  // сделку ищем и без курса: таблица «Кто написал в Direct» показывает
+  // новые переписки, а новая она или старая, видно только по сделке
+  if (!msg.ts) return { status: 'skip_empty' };
   const auth = { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
 
   // 1. Сделка, куда amoCRM подшил само сообщение (событие «входящее
@@ -2425,6 +2429,8 @@ function pplDirectPatch_(msg, lead) {
   const t = new Date(msg.ts).getTime();
   const created = Number(lead.created_at || 0) * 1000;
   const fresh = created >= t - PPL_DIRECT_BEFORE_MS && created <= t + PPL_DIRECT_AFTER_MS;
+  // без курса и рекламы писать нечего — запоминаем только, новая ли переписка
+  if (!msg.course && !msg.ad_id) return { patch: null, status: fresh ? 'no_course' : 'old_lead' };
   const fields = [];
   if (fresh && msg.course && !pplLeadFieldValue_(lead, PPL_AMO_UTM_CAMPAIGN_FIELD)) {
     fields.push({ field_id: PPL_AMO_UTM_CAMPAIGN_FIELD, values: [{ value: msg.course }] });
@@ -2514,14 +2520,14 @@ const PPL_DIRECT_TEXT_MAX = 90;
  * отказа, а этап у сделок, тронутых сегодня, утренний.
  */
 function pplDirectRows_(since, until) {
-  const rows = pplRows_(PPL_DIRECT_SHEET).filter(function (r) {
+  const rows = pplDirectPick_(pplRows_(PPL_DIRECT_SHEET).filter(function (r) {
     const st = String(r.status || '');
     if (st === 'skip_service' || st === 'skip_empty') return false;
     const t = new Date(r.ts);
     if (isNaN(t.getTime())) return false;
     const d = pplAnyIso_(t);
     return d >= since && d <= until;
-  });
+  }));
   if (!rows.length) return [];
 
   const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
@@ -2538,6 +2544,23 @@ function pplDirectRows_(since, until) {
     stages = pplFetchPipelineStages_(base, auth);
   }
   return rows.map(function (r) { return pplDirectRow_(r, leadById[Number(r.lead_id)] || null, stages); });
+}
+
+/**
+ * Какие строки листа показывать. С курсом — всегда. Без курса — только
+ * новую переписку (задача нашла сделку, заведённую на неё: статус
+ * no_course) и только если у того же человека за период нет строки с
+ * курсом, иначе он попал бы в таблицу дважды. Текущие разговоры старых
+ * контактов без курса — не обращения: их не показываем и за их сделками
+ * в amoCRM не ходим. Чистая функция.
+ */
+function pplDirectPick_(rows) {
+  const withCourse = {};
+  rows.forEach(function (r) { if (String(r.course || '')) withCourse[String(r.contact_id)] = true; });
+  return rows.filter(function (r) {
+    if (String(r.course || '')) return true;
+    return String(r.status || '') === 'no_course' && !withCourse[String(r.contact_id)];
+  });
 }
 
 /**

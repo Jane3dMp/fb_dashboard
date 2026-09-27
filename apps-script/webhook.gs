@@ -135,9 +135,13 @@ function appendUnique_(row) {
  * «ФБ»: там есть доступ к amoCRM, а сделка к моменту вебхука может ещё
  * не появиться.
  *
- * Пишем только сообщения, где нашёлся курс или реклама (ad_id), и только
- * первое такое от человека за SP_WINDOW_DAYS дней: дальше в переписке
- * курс может упоминаться сколько угодно, метка нужна одна.
+ * Пишем каждого, кто написал, — одна строка на человека за SP_WINDOW_DAYS
+ * дней, курс в ней есть, если назван: страница «Путь клиента» показывает
+ * все новые переписки, а не только рекламные (27.09.2026 новые люди
+ * пришли отметками в сторис, без курса, и в таблицу не попали). Строка
+ * без курса не мешает записать строку с курсом: человек мог
+ * поздороваться, а курс назвать вторым сообщением. Дальше в переписке
+ * курс может упоминаться сколько угодно — метка нужна одна.
  */
 const SP_SHEET = 'Курсы из Direct';
 const SP_HEADERS = ['ts', 'service', 'bot', 'contact_id', 'username', 'name',
@@ -294,26 +298,18 @@ function handleSendPulse_(ev) {
   const text = spText_(ev);
   const course = spCourse_(text);
   const ref = spReferral_(ev);
-  // ни курса, ни рекламы — для аналитики это просто переписка
-  if (!course && !ref.ad_id) return;
 
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const sh = spSheet_();
     const ts = new Date((Number(ev.date) || Date.now() / 1000) * 1000);
-    // уже есть курс этого человека за окно — вторая метка не нужна
     const last = sh.getLastRow();
     if (last > 1) {
       const from = Math.max(2, last - 1999);   // хватит с запасом: ~неделя переписок
-      const rows = sh.getRange(from, 1, last - from + 1, 4).getValues();
-      const edge = ts.getTime() - SP_WINDOW_DAYS * 86400000;
-      for (let i = rows.length - 1; i >= 0; i--) {
-        if (String(rows[i][3]) !== String(contact.id)) continue;
-        const seen = new Date(rows[i][0]).getTime();
-        if (seen >= edge) return;
-        break;
-      }
+      // до колонки course включительно: [ts, service, bot, contact_id, username, name, course]
+      const rows = sh.getRange(from, 1, last - from + 1, 7).getValues();
+      if (spSeenRecently_(rows, String(contact.id), !!course, ts.getTime())) return;
     }
     sh.appendRow([
       ts.toISOString(),
@@ -332,6 +328,23 @@ function handleSendPulse_(ev) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Был ли уже человек в листе за окно SP_WINDOW_DAYS. Строка без курса не
+ * мешает записать строку с курсом — «Здравствуйте» и следом «Minecraft:
+ * сколько стоит?» дадут две строки, страница покажет одну, с курсом.
+ * Чистая функция: rows — строки листа по колонку course, по порядку записи.
+ */
+function spSeenRecently_(rows, contactId, hasCourse, now) {
+  const edge = now - SP_WINDOW_DAYS * 86400000;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i][3]) !== contactId) continue;
+    // строки идут по времени: вышли за окно — дальше только старее
+    if (new Date(rows[i][0]).getTime() < edge) return false;
+    if (!hasCourse || String(rows[i][6] || '')) return true;
+  }
+  return false;
 }
 
 function spSheet_() {

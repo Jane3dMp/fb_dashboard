@@ -1083,6 +1083,21 @@ test('старая сделка клиента: только тег, поля н
   assert.strictEqual(JSON.stringify(p.patch.tags_to_add), JSON.stringify([{ name: 'курс: Английский' }]));
 });
 
+test('без курса: в сделку ничего не пишем, запоминаем, новая ли переписка', () => {
+  const fresh = directPatch_(
+    { ts: '2026-09-26T20:53:05Z', course: '', ad_id: '' },
+    { id: 38875423, created_at: unix('2026-09-26T20:53:01Z') }
+  );
+  assert.strictEqual(fresh.patch, null);
+  assert.strictEqual(fresh.status, 'no_course');
+  const old = directPatch_(
+    { ts: '2026-09-26T20:24:00Z', course: '', ad_id: '' },
+    { id: 38724005, created_at: unix('2026-09-20T10:00:00Z') }
+  );
+  assert.strictEqual(old.patch, null);
+  assert.strictEqual(old.status, 'old_lead');
+});
+
 test('utm_campaign у новой сделки уже заполнен — не перезаписываем', () => {
   const p = directPatch_(
     { ts: '2026-09-26T15:20:05Z', course: 'Minecraft', ad_id: '' },
@@ -1137,6 +1152,19 @@ test('сделки нет: пока retry — ищем, после попыто�
   assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: 'retry' }, null, {}).outcome, 'wait');
   assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: '' }, null, {}).outcome, 'wait');
   assert.strictEqual(directRow_({ ts: '2026-09-26T15:20:05Z', status: 'no_contact' }, null, {}).outcome, 'no_lead');
+});
+
+test('в таблицу: с курсом — всегда, без курса — только новая переписка и один раз', () => {
+  const pick_ = sandbox.pplDirectPick_;
+  const out = pick_([
+    { contact_id: 'a', course: 'Minecraft', status: 'old_lead' },   // курс у старого контакта — показываем
+    { contact_id: 'b', course: '', status: 'no_course' },           // отметка в сторис, новая сделка
+    { contact_id: 'c', course: '', status: 'old_lead' },            // текущий разговор — нет
+    { contact_id: 'd', course: '', status: 'retry' },               // сделку ещё ищем — пока нет
+    { contact_id: 'e', course: '', status: 'no_course' },           // поздоровался…
+    { contact_id: 'e', course: 'Глина', status: 'ok' }              // …и назвал курс — одна строка
+  ]);
+  assert.strictEqual(out.map(r => r.contact_id + ':' + (r.course || '-')).join(' '), 'a:Minecraft b:- e:Глина');
 });
 
 test('короткие имена аккаунтов', () => {
@@ -1412,6 +1440,20 @@ test('текст сообщения SendPulse: из channel_data, иначе las
   assert.strictEqual(spText_({ info: { message: { channel_data: { message: { text: 'Minecraft: цена?' } } } } }), 'Minecraft: цена?');
   assert.strictEqual(spText_({ contact: { last_message: 'Глина: пробное?' } }), 'Глина: пробное?');
   assert.strictEqual(spText_({}), '');
+});
+
+test('один человек — одна строка за неделю, но строка с курсом важнее', () => {
+  const seen_ = hookBox.spSeenRecently_;
+  const now = Date.parse('2026-09-27T12:00:00Z');
+  // [ts, service, bot, contact_id, username, name, course]
+  const hi = ['2026-09-27T11:00:00Z', 'instagram', 'x', 'c1', 'u', 'n', ''];
+  const mc = ['2026-09-27T11:05:00Z', 'instagram', 'x', 'c1', 'u', 'n', 'Minecraft'];
+  const old = ['2026-09-10T11:00:00Z', 'instagram', 'x', 'c1', 'u', 'n', 'Minecraft'];
+  assert.strictEqual(seen_([hi], 'c1', false, now), true, 'второе «Здравствуйте» — не новая строка');
+  assert.strictEqual(seen_([hi], 'c1', true, now), false, 'курс вторым сообщением — строка пишется');
+  assert.strictEqual(seen_([hi, mc], 'c1', true, now), true, 'курс уже записан');
+  assert.strictEqual(seen_([old], 'c1', false, now), false, 'за окном — снова новый');
+  assert.strictEqual(seen_([hi], 'c2', false, now), false, 'другой человек');
 });
 
 /* ---------- etl_amo.gs: повтор запросов к amoCRM ---------- */
