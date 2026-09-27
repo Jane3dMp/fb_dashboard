@@ -937,6 +937,176 @@ test('бюджет Meta приходит в центах строкой', () => 
   assert.strictEqual(budget_(undefined), 0);
 });
 
+test('качество переписок: новые люди, блокировки и глубина — каждое в свою метрику', () => {
+  const row = addMetrics_(zeroMetrics_(), {
+    spend: '10', actions: [
+      { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '4' },
+      { action_type: 'onsite_conversion.messaging_first_reply', value: '3' },
+      { action_type: 'onsite_conversion.messaging_block', value: '1' },
+      { action_type: 'onsite_conversion.messaging_user_depth_2_message_send', value: '3' },
+      { action_type: 'onsite_conversion.messaging_user_depth_3_message_send', value: '2' },
+      { action_type: 'onsite_conversion.messaging_user_subscribed', value: '9' }
+    ]
+  });
+  assert.strictEqual(row.messages, 4, 'новые и блокировки не должны попасть в «сообщений»');
+  assert.strictEqual(row.new_chats, 3);
+  assert.strictEqual(row.blocks, 1);
+  assert.strictEqual(row.depth2, 3);
+  assert.strictEqual(row.depth3, 2);
+});
+
+test('глубины разговора нет в строке, пока Meta её не прислала, — и в итоге тоже', () => {
+  const plain = addMetrics_(zeroMetrics_(), { actions: [
+    { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '2' }] });
+  assert.strictEqual('depth2' in plain, false, 'нули глубины зря раздували бы отчёт');
+  assert.strictEqual('depth3' in sumMetrics_([plain, plain]), false);
+  const deep = addMetrics_(zeroMetrics_(), { actions: [
+    { action_type: 'onsite_conversion.messaging_user_depth_3_message_send', value: '1' }] });
+  assert.strictEqual(sumMetrics_([plain, deep]).depth3, 1);
+  assert.strictEqual(sandbox.pplMinusMetrics_(sumMetrics_([deep, deep]), deep).depth3, 1);
+});
+
+test('старый накопитель без новых полей не превращается в NaN', () => {
+  const old = { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+  addMetrics_(old, { actions: [{ action_type: 'onsite_conversion.messaging_block', value: '2' }] });
+  assert.strictEqual(old.blocks, 2);
+});
+
+test('итог складывает и метрики качества, охват в итог не идёт', () => {
+  const t = sumMetrics_([
+    { spend: 1, messages: 2, new_chats: 1, blocks: 0, depth3: 1, reach: 500, frequency: 2 },
+    { spend: 2, messages: 3, new_chats: 2, blocks: 1, depth3: 0, reach: 700, frequency: 3 }
+  ]);
+  assert.strictEqual(t.messages, 5);
+  assert.strictEqual(t.new_chats, 3);
+  assert.strictEqual(t.blocks, 1);
+  assert.strictEqual(t.depth3, 1);
+  assert.strictEqual(t.reach, undefined, 'охваты разных объявлений складывать нельзя');
+});
+
+const minusMetrics_ = sandbox.pplMinusMetrics_;
+const msgTypes_ = sandbox.pplMsgTypes_;
+
+test('неделя до последней = 14 дней минус 7, без минусов от округления', () => {
+  const two = zeroMetrics_(); Object.assign(two, { spend: 30.1, impressions: 9000, messages: 12, new_chats: 5 });
+  const week = zeroMetrics_(); Object.assign(week, { spend: 20.05, impressions: 5000, messages: 13, new_chats: 2 });
+  const prev = minusMetrics_(two, week);
+  assert.strictEqual(prev.spend, 10.05);
+  assert.strictEqual(prev.impressions, 4000);
+  assert.strictEqual(prev.messages, 0, 'расхождение Meta на единицу не даёт −1');
+  assert.strictEqual(prev.new_chats, 3);
+});
+
+test('виды переписочных действий — без повторов и без чужих', () => {
+  const types = msgTypes_([
+    { actions: [{ action_type: 'link_click' }, { action_type: 'onsite_conversion.messaging_block' }] },
+    { actions: [{ action_type: 'onsite_conversion.messaging_block' },
+                { action_type: 'onsite_conversion.messaging_first_reply' }] },
+    {}
+  ]);
+  assert.deepStrictEqual([...types],
+    ['onsite_conversion.messaging_block', 'onsite_conversion.messaging_first_reply']);
+});
+
+/* ---------- выгорание креатива ---------- */
+
+console.log('\nВыгорание креатива');
+
+const burnout_ = sandbox.pplBurnout_;
+const wk = (o) => Object.assign(zeroMetrics_(), { impressions: 5000, link_clicks: 100 }, o);
+
+test('высокая частота и сообщение подорожало на 50% — выгорает', () => {
+  const b = burnout_(wk({ spend: 60, messages: 40, frequency: 3.4 }), wk({ spend: 40, messages: 40 }));
+  assert.strictEqual(b.level, 'hot');
+  assert.ok(/частота 3,4/.test(b.reason) && /50%/.test(b.reason), b.reason);
+});
+
+test('то же подорожание при низкой частоте — не креатив, молчим', () => {
+  const b = burnout_(wk({ spend: 60, messages: 40, frequency: 2.2 }), wk({ spend: 40, messages: 40 }));
+  assert.strictEqual(b.level, '');
+});
+
+test('очень высокая частота без подорожания — предупреждение, но не «выгорает»', () => {
+  const b = burnout_(wk({ spend: 40, messages: 40, frequency: 5 }), wk({ spend: 40, messages: 40 }));
+  assert.strictEqual(b.level, 'warn');
+});
+
+test('сообщений за неделю ни одного, а денег ушло как на два прежних — выгорает', () => {
+  const b = burnout_(wk({ spend: 7, messages: 0, frequency: 3.5 }), wk({ spend: 30, messages: 10 }));
+  assert.strictEqual(b.level, 'hot');
+  assert.ok(/ни одного/.test(b.reason), b.reason);
+});
+
+test('мало показов — не судим даже при высокой частоте', () => {
+  const b = burnout_(wk({ impressions: 600, spend: 60, messages: 10, frequency: 6 }),
+    wk({ spend: 10, messages: 10 }));
+  assert.strictEqual(b.level, '');
+});
+
+test('новое объявление: сравнивать не с чем, частота умеренная — молчим', () => {
+  const b = burnout_(wk({ spend: 20, messages: 10, frequency: 3.5 }), zeroMetrics_());
+  assert.strictEqual(b.level, '');
+});
+
+test('объявление без переписок: CTR упал вдвое при высокой частоте — выгорает', () => {
+  const b = burnout_(wk({ spend: 20, link_clicks: 20, frequency: 3.2 }), wk({ spend: 20, link_clicks: 40 }));
+  assert.strictEqual(b.level, 'hot');
+  assert.ok(/50% реже/.test(b.reason), b.reason);
+});
+
+test('сообщение подешевело, хоть CTR и упал, — не выгорание', () => {
+  const b = burnout_(wk({ spend: 30, messages: 40, link_clicks: 50, frequency: 3.6 }),
+    wk({ spend: 40, messages: 40, link_clicks: 100 }));
+  assert.strictEqual(b.level, '');
+});
+
+/* ---------- разрезы аудитории ---------- */
+
+console.log('\nРазрезы аудитории');
+
+const localHour_ = sandbox.pplLocalHour_;
+const weekday_ = sandbox.pplWeekday_;
+const ageGenderOrder_ = sandbox.pplAgeGenderOrder_;
+const graphRows_ = sandbox.pplGraphRows_;
+
+test('час показа переводится из пояса кабинета в минский', () => {
+  assert.strictEqual(localHour_('14:00:00 - 14:59:59', 3), 14, 'кабинет уже по Минску');
+  assert.strictEqual(localHour_('14:00:00 - 14:59:59', 0), 17, 'UTC → +3');
+  assert.strictEqual(localHour_('23:00:00 - 23:59:59', 0), 2, 'через полночь');
+  assert.strictEqual(localHour_('10:00:00 - 10:59:59', -7), 20, 'Лос-Анджелес летом');
+  assert.strictEqual(localHour_('08:00:00 - 08:59:59', null), 8, 'пояс неизвестен — как есть');
+  assert.strictEqual(localHour_('', 3), null);
+});
+
+test('день недели: понедельник — 1, воскресенье — 7', () => {
+  assert.strictEqual(weekday_('2026-09-27'), 7);
+  assert.strictEqual(weekday_('2026-09-28'), 1);
+  assert.strictEqual(weekday_('2026-10-03'), 6);
+});
+
+test('возраст по порядку, неизвестный в конце, внутри — женщины, потом мужчины', () => {
+  const rows = [
+    { age: 'Unknown', gender: 'unknown' }, { age: '35-44', gender: 'male' },
+    { age: '25-34', gender: 'male' }, { age: '35-44', gender: 'female' },
+    { age: '65+', gender: 'female' }, { age: '25-34', gender: 'unknown' },
+    { age: '25-34', gender: 'female' }
+  ];
+  const got = rows.sort(ageGenderOrder_).map(r => r.age + ' ' + r.gender);
+  assert.deepStrictEqual(got, [
+    '25-34 female', '25-34 male', '25-34 unknown', '35-44 female', '35-44 male',
+    '65+ female', 'Unknown unknown'
+  ]);
+});
+
+test('строки ответа Meta: нет тела — ok=false, одна страница — все строки', () => {
+  const none = graphRows_(null, 5);
+  assert.strictEqual(none.ok, false);
+  assert.strictEqual(none.rows.length, 0);
+  const one = graphRows_({ data: [{ a: 1 }, { a: 2 }], paging: { cursors: {} } }, 5);
+  assert.strictEqual(one.ok, true);
+  assert.strictEqual(one.rows.length, 2);
+});
+
 /* ================= курс из первого сообщения в Direct ================= */
 
 console.log('\nКурс из Direct: разрез выручки');

@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Аудитория — Прознание / CODDY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F5F1E8; --card:#FFFFFF; --ink:#1C1B19; --ink2:#6E6A62;
+    --yellow:#FFD93B; --yellow-soft:#FBF0C4; --line:#EBE6DB;
+    --blue:#3B5BDB; --green:#2E7D46; --red:#C0392B; --shadow:0 2px 14px rgba(28,27,25,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .num,td{font-variant-numeric:tabular-nums}
+
+  .topbar{max-width:1400px;margin:0 auto;padding:20px 24px 0;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;letter-spacing:-.02em;background:var(--card);padding:10px 20px;border-radius:100px;box-shadow:var(--shadow)}
+  .brand b{color:#C9A800}
+  nav.dashnav{display:flex;gap:2px;background:var(--card);padding:6px;border-radius:100px;box-shadow:var(--shadow);flex-wrap:wrap}
+  nav.dashnav a{color:var(--ink2);font-size:13px;font-weight:500;text-decoration:none;padding:9px 18px;border-radius:100px;transition:.15s}
+  nav.dashnav a:hover{color:var(--ink)}
+  nav.dashnav a.active{background:var(--ink);color:#fff}
+  #updated{margin-left:auto;font-size:12px;color:var(--ink2)}
+
+  .pagehead{max-width:1400px;margin:0 auto;padding:22px 24px 4px}
+  .pagehead h1{font-family:'Poppins',sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em}
+  .pagehead p{color:var(--ink2);font-size:14px;margin-top:2px}
+
+  .wrap{max-width:1400px;margin:0 auto;padding:18px 24px 60px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .controls button{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 16px;cursor:pointer;color:var(--ink)}
+  .controls button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .controls .custom-period{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:#666;margin-left:8px}
+  .controls .custom-period input{padding:7px 10px;border:1px solid #ddd;border-radius:999px;font:inherit;font-size:13px;background:#fff}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
+  .card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:16px 18px}
+  .card .k{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);font-weight:600}
+  .card .v{font-family:'Poppins',sans-serif;font-size:26px;font-weight:600;margin-top:4px;line-height:1.1}
+  .card .s{font-size:12px;color:var(--ink2);margin-top:3px}
+
+  .block{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:22px 24px;margin-bottom:18px}
+  .blockhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .blockhead h2{font-family:'Poppins',sans-serif;font-weight:600;font-size:17px}
+  .blockhead .sub{font-size:12.5px;color:var(--ink2)}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+  th{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);text-align:right;padding:8px 7px;border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:8px 7px;border-bottom:1px solid var(--line);text-align:right}
+  td:first-child{text-align:left;font-weight:500}
+  td small{color:var(--ink2);font-size:11px;margin-left:2px}
+  td.zero{color:#c9c4b8}
+  td.good{color:var(--green);font-weight:600}
+  td.bad{color:var(--red);font-weight:600}
+  td.few{color:var(--ink2)}
+  tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+  .note{background:var(--yellow-soft);border-radius:14px;padding:14px 18px;font-size:13.5px;line-height:1.55;color:var(--ink);margin-top:14px}
+  .note.warn{background:#FBE4E1;border:1px solid #F0BDB6}
+
+  /* часы: светлый столбик — доля расхода, тёмный — доля переписок */
+  .hours{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:130px;margin-top:4px}
+  .hours .h{position:relative;height:100%;display:flex;align-items:flex-end;justify-content:center}
+  .hours .sp{position:absolute;bottom:0;left:0;right:0;background:#F3DF94;border-radius:3px 3px 0 0}
+  .hours .ms{position:relative;width:45%;background:var(--ink);border-radius:2px 2px 0 0;min-height:1px}
+  .hlabels{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;font-size:10px;color:var(--ink2);margin:4px 0 12px;text-align:center}
+  .legend{font-size:12px;color:var(--ink2);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+  #status{max-width:1160px;margin:0 auto;padding:30px 24px;color:var(--ink2)}
+  #status.error{color:var(--red)}
+
+  #gate{position:fixed;inset:0;background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:50}
+  #gate input{width:180px;padding:12px 18px;border-radius:12px;border:none;font-size:16px;text-align:center}
+  #gate button{background:var(--yellow);border:none;border-radius:100px;padding:10px 26px;font-weight:600;font-size:14px;cursor:pointer}
+
+  @media(max-width:600px){.wrap,.pagehead,.topbar{padding-left:14px;padding-right:14px}.hours{gap:1px}.hlabels{gap:1px}}
+
+  /* Печать / сохранение в PDF: только то, что на экране, без кнопок */
+  @media print{
+    @page{size:A4 landscape;margin:12mm}
+    body{background:#fff}
+    #gate,.controls,nav.dashnav,.brand{display:none !important}
+    .topbar{padding:0}
+    #updated{margin-left:0;font-size:11px}
+    .pagehead{padding:0 0 6px}
+    .pagehead h1{font-size:20px}
+    .wrap{max-width:none;padding:0}
+    .card,.block{box-shadow:none;border:1px solid #ddd;border-radius:8px;padding:12px}
+    table{font-size:10px}
+    th,td{padding:4px 5px}
+    tr{page-break-inside:avoid}
+    .block{page-break-inside:avoid}
+    .note{border:1px solid #eee}
+    .hours .sp,.hours .ms,.legend i{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" style="display:flex">
+  <form onsubmit="return checkPass(event)">
+    <input id="passInput" type="password" autocomplete="off">
+    <div style="text-align:center;margin-top:12px"><button type="submit">Войти</button></div>
+  </form>
+</div>
+
+<div class="topbar">
+  <div class="brand">Аналитика<b>.</b></div>
+  <nav class="dashnav">
+    <a href="index.html">Расход</a>
+    <a href="funnel.html">Воронка</a>
+    <a href="channel.html">Instagram-канал</a>
+    <a href="brands.html">Направления</a>
+    <a href="kanikuly.html">Каникулы</a>
+    <a href="daily.html">Дни</a>
+    <a href="active.html">Сейчас активно</a>
+    <a href="audience.html" class="active">Аудитория</a>
+    <a href="people.html">Путь клиента</a>
+  </nav>
+  <div id="updated"></div>
+</div>
+
+<div class="pagehead">
+  <h1>Аудитория</h1>
+  <p>Кому, где и когда реклама приносит переписки дешевле — возраст и пол, место показа, время</p>
+</div>
+
+<div class="wrap">
+  <div class="controls">
+    <button data-period="30">30 дней</button>
+    <button data-period="90">90 дней</button>
+    <button data-period="this">Этот месяц</button>
+    <button data-period="prev">Прошлый месяц</button>
+    <span class="custom-period">
+      с <input type="date" id="dateFrom">
+      по <input type="date" id="dateTo">
+      <button id="btnPeriod">Показать период</button>
+    </span>
+    <button id="btnFresh" title="Перезапросить у Meta, минуя кэш">⟳ Обновить</button>
+    <button id="btnPdf" title="Сохранить то, что сейчас на экране, в PDF (в диалоге печати выберите «Сохранить как PDF»)">⤓ PDF</button>
+  </div>
+
+  <div id="status">Загрузка…</div>
+
+  <div id="content" style="display:none">
+    <div class="cards" id="cards"></div>
+    <div id="warn"></div>
+
+    <div class="block">
+      <div class="blockhead"><h2>Возраст и пол</h2><span class="sub">кому показывали</span></div>
+      <div class="table-scroll"><table><thead id="ageHead"></thead><tbody id="ageBody"></tbody></table></div>
+      <div class="note" id="ageNote"></div>
+    </div>
+
+    <div class="block">
+      <div class="blockhead"><h2>Где показывали</h2><span class="sub">площадка и место показа</span></div>
+      <div class="table-scroll"><table><thead id="placeHead"></thead><tbody id="placeBody"></tbody></table></div>
+      <div class="note" id="placeNote"></div>
+    </div>
+
+    <div class="block">
+      <div class="blockhead"><h2>Время суток</h2><span class="sub" id="hoursSub"></span></div>
+      <div id="hoursBox"></div>
+    </div>
+
+    <div class="block">
+      <div class="blockhead"><h2>Дни недели</h2></div>
+      <div class="table-scroll"><table><thead id="dowHead"></thead><tbody id="dowBody"></tbody></table></div>
+      <div class="note" id="dowNote"></div>
+    </div>
+
+    <div class="note">Разрезы считаются по всем объявлениям кабинетов за период.
+      «Доля расхода» и «доля сообщений» — какая часть денег и переписок пришлась
+      на строку: если переписок доля больше, чем денег, строка работает лучше
+      среднего. Цена сообщения <b style="color:var(--green)">зелёная</b> — на 20% и
+      больше дешевле средней, <b style="color:var(--red)">красная</b> — на 25% и
+      больше дороже; серая — в строке меньше трёх переписок, и цифра случайная.
+      Суммы разрезов могут чуть не сходиться с итогом: мелкие ячейки Meta прячет.
+      Валюта — валюта рекламного кабинета.</div>
+  </div>
+</div>
+
+<script src="assets/dash.js"></script>
+<script>
+let currentPeriod = { kind: '30' };
+const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+function periodRange() {
+  const now = new Date();
+  if (currentPeriod.kind === '30' || currentPeriod.kind === '90') {
+    const days = Number(currentPeriod.kind);
+    return { since: iso(new Date(now.getTime() - (days - 1) * 86400000)), until: iso(now) };
+  }
+  if (currentPeriod.kind === 'this') {
+    return { since: iso(new Date(now.getFullYear(), now.getMonth(), 1)), until: iso(now) };
+  }
+  if (currentPeriod.kind === 'prev') {
+    return {
+      since: iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      until: iso(new Date(now.getFullYear(), now.getMonth(), 0))
+    };
+  }
+  return { since: currentPeriod.since, until: currentPeriod.until };
+}
+
+document.querySelectorAll('.controls button[data-period]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.controls button[data-period]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentPeriod = { kind: btn.dataset.period };
+    loadData();
+  });
+});
+document.querySelector('.controls button[data-period="30"]').classList.add('active');
+
+document.getElementById('btnPeriod').addEventListener('click', () => {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('Заполните обе даты'); return; }
+  if (from > to) { alert('Дата «с» позже даты «по»'); return; }
+  document.querySelectorAll('.controls button[data-period]').forEach(b => b.classList.remove('active'));
+  currentPeriod = { kind: 'custom', since: from, until: to };
+  loadData();
+});
+document.getElementById('btnFresh').addEventListener('click', () => loadData(true));
+document.getElementById('btnPdf').addEventListener('click', () => window.print());
+
+const fmtInt = n => (n || 0).toLocaleString('ru-RU');
+let CUR = 'USD';
+const money = n => n == null ? '—' : n.toLocaleString('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' ' + (CUR === 'USD' ? '$' : CUR);
+const pct = n => n == null ? '—' : (n * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + '%';
+const ratio = (a, b) => b ? a / b : null;
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+async function loadData(fresh) {
+  const status = document.getElementById('status');
+  const content = document.getElementById('content');
+  status.style.display = 'block'; status.className = ''; status.textContent = 'Загрузка…';
+  content.style.display = 'none';
+  try {
+    const r = periodRange();
+    const d = await api('view=daily&part=audience&since=' + r.since + '&until=' + r.until +
+      (fresh ? '&nocache=1' : ''));
+    // старое развёртывание про part=audience не знает и молча отдаёт дни
+    if (!d || d.view !== 'audience') {
+      throw new Error('Бэкенд не отдаёт «Аудиторию» — обновите развёртывание Apps Script.');
+    }
+    render(d);
+    status.style.display = 'none';
+    content.style.display = 'block';
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Ошибка: ' + err.message;
+  }
+}
+
+/* ---------- подписи ---------- */
+
+const GENDER = { female: 'Женщины', male: 'Мужчины' };
+const ageGenderLabel = r => (GENDER[r.gender] || 'Пол не указан') +
+  (/\d/.test(r.age) ? (GENDER[r.gender] ? ' ' : ', ') + r.age.replace('-', '–') : ', возраст не указан');
+
+const PLATFORM = {
+  instagram: 'Instagram', facebook: 'Facebook', messenger: 'Messenger',
+  audience_network: 'Audience Network', threads: 'Threads', whatsapp: 'WhatsApp'
+};
+const POSITION = {
+  feed: 'лента', instagram_stories: 'Stories', instagram_reels: 'Reels',
+  instagram_explore: 'Интересное', instagram_explore_grid_home: 'Интересное: сетка',
+  instagram_profile_feed: 'лента профиля', instagram_profile_reels: 'Reels в профиле',
+  instagram_search: 'поиск', facebook_stories: 'Stories', facebook_reels: 'Reels',
+  facebook_reels_overlay: 'баннер поверх Reels', marketplace: 'Marketplace',
+  video_feeds: 'видеолента', right_hand_column: 'правая колонка', search: 'поиск',
+  instream_video: 'видео In-Stream', messenger_inbox: 'входящие',
+  messenger_stories: 'Stories', an_classic: 'сайты и приложения',
+  rewarded_video: 'видео с вознаграждением', threads_feed: 'лента',
+  notification: 'уведомления', biz_disco_feed: 'бизнес-лента'
+};
+const placeLabel = r => (PLATFORM[r.platform] || r.platform || '—') + ' · ' +
+  (POSITION[r.position] || String(r.position || '—').replace(/_/g, ' '));
+
+const DOW = ['', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+const hh = h => String(h).padStart(2, '0');
+
+/* ---------- таблицы ---------- */
+
+// у старого развёртывания нет качества переписок; глубину Meta не
+// документирует — колонку показываем, только если такие действия пришли
+const hasField = (d, k) => d.totals && d.totals[k] !== undefined;
+const hasType = (d, frag) => (d.msg_types || []).some(t => t.indexOf(frag) !== -1);
+const MIN_MSG = 3;          // меньше переписок в строке — цена случайная
+const GOOD = 0.8, BAD = 1.25;
+
+function columns(d) {
+  const avg = ratio(d.totals.spend, d.totals.messages);
+  const cols = [
+    { h: 'Потрачено', v: x => money(x.spend) },
+    { h: 'Доля<br>расхода', v: x => pct(ratio(x.spend, d.totals.spend)) },
+    { h: 'Показов', v: x => fmtInt(x.impressions) },
+    { h: 'CTR', v: x => pct(ratio(x.link_clicks, x.impressions)) },
+    { h: 'Сообщений', v: x => fmtInt(x.messages) },
+    { h: 'Доля<br>сообщений', v: x => pct(ratio(x.messages, d.totals.messages)) },
+    { h: 'Цена<br>сообщ.', v: x => money(ratio(x.spend, x.messages)), cls: x => costClass(x, avg) }
+  ];
+  if (hasField(d, 'new_chats')) {
+    cols.push({ h: 'Из них<br>новых', v: x => share(x.new_chats, x.messages),
+      t: 'Написали бизнесу впервые; остальные писали и раньше — часто это действующие клиенты' });
+  }
+  if (hasType(d, 'messaging_user_depth_3')) {
+    cols.push({ h: 'Написали<br>3+ раз', v: x => share(x.depth3, x.messages),
+      t: 'Сколько человек отправили три сообщения и больше' });
+  }
+  if (hasField(d, 'blocks')) {
+    cols.push({ h: 'Заблоки-<br>ровали', v: x => fmtInt(x.blocks),
+      t: 'Сколько человек после рекламы заблокировали аккаунт' });
+  }
+  return cols;
+}
+
+const share = (n, total) => !total ? '—' : !n ? '0'
+  : fmtInt(n) + ' <small>' + Math.round(n / total * 100) + '%</small>';
+
+/** Цвет цены сообщения: заметно дешевле или дороже средней — и только при достаточных данных. */
+function costClass(x, avg) {
+  if (!x.messages || !avg) return '';
+  if (x.messages < MIN_MSG) return 'few';
+  const c = x.spend / x.messages;
+  return c <= avg * GOOD ? 'good' : c >= avg * BAD ? 'bad' : '';
+}
+
+function table(headId, bodyId, first, rows, label, cols, total) {
+  document.getElementById(headId).innerHTML = '<tr><th>' + first + '</th>' +
+    cols.map(c => '<th' + (c.t ? ' title="' + esc(c.t) + '"' : '') + '>' + c.h + '</th>').join('') + '</tr>';
+  const body = document.getElementById(bodyId);
+  body.innerHTML = '';
+  rows.concat(total ? [total] : []).forEach(x => {
+    const tr = document.createElement('tr');
+    if (x === total) tr.className = 'total';
+    tr.innerHTML = '<td>' + (x === total ? 'Итого' : esc(label(x))) + '</td>' + cols.map(c => {
+      const v = c.v(x);
+      const cls = v === '—' || v === '0' ? 'zero' : (c.cls && x !== total ? c.cls(x) : '');
+      const title = cls === 'few' ? ' title="Меньше трёх переписок — цена случайная"' : '';
+      return '<td class="' + cls + '"' + title + '>' + v + '</td>';
+    }).join('');
+    body.appendChild(tr);
+  });
+}
+
+/**
+ * Вывод под таблицей: где дешевле и где дороже средней, и куда ушли деньги
+ * без единой переписки. Только строки с заметной долей расхода — иначе
+ * «лучшим» окажется сегмент на два доллара с одной случайной перепиской.
+ */
+function verdict(d, rows, label) {
+  const avg = ratio(d.totals.spend, d.totals.messages);
+  if (!avg) return 'Переписок за период нет — сравнивать нечего.';
+  const big = rows.filter(x => x.spend >= d.totals.spend * 0.03);
+  const cost = x => x.spend / x.messages;
+  // посреди фразы «женщины 35–44» и «суббота» — со строчной, Instagram — как есть
+  const name = x => esc(label(x)).replace(
+    /^(Женщины|Мужчины|Пол|Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье)/,
+    s => s.toLowerCase());
+  const good = big.filter(x => x.messages >= MIN_MSG && cost(x) <= avg * GOOD)
+    .sort((a, b) => cost(a) - cost(b)).slice(0, 3);
+  const bad = big.filter(x => x.messages >= MIN_MSG && cost(x) >= avg * BAD)
+    .sort((a, b) => b.spend - a.spend).slice(0, 3);
+  const empty = big.filter(x => !x.messages).sort((a, b) => b.spend - a.spend).slice(0, 3);
+  const parts = ['Средняя цена сообщения — <b>' + money(avg) + '</b>.'];
+  if (good.length) parts.push('Дешевле: ' + good.map(x => name(x) + ' — ' + money(cost(x))).join(', ') + '.');
+  if (bad.length) parts.push('Дороже: ' + bad.map(x => name(x) + ' — ' + money(cost(x))).join(', ') + '.');
+  if (empty.length) {
+    parts.push('Без единой переписки: ' + empty.map(x => name(x) + ' — ' + money(x.spend)).join(', ') + '.');
+  }
+  if (!good.length && !bad.length && !empty.length) parts.push('Заметных перекосов нет — строки близки к средней.');
+  return parts.join(' ');
+}
+
+/* ---------- страница ---------- */
+
+function render(d) {
+  CUR = d.currency || 'USD';
+  document.getElementById('updated').textContent =
+    d.since + ' — ' + d.until + ' · обновлено ' + new Date(d.updated).toLocaleString('ru-RU');
+
+  const t = d.totals;
+  const cards = [
+    card('Потрачено', money(t.spend), fmtInt(t.impressions) + ' показов'),
+    card('Сообщений', fmtInt(t.messages), 'цена сообщения ' + money(ratio(t.spend, t.messages)))
+  ];
+  if (hasField(d, 'new_chats')) {
+    cards.push(card('Из них новых', t.messages ? Math.round(t.new_chats / t.messages * 100) + '%' : '—',
+      fmtInt(t.new_chats) + ' написали впервые, остальные — вернувшиеся'));
+  }
+  if (hasField(d, 'blocks')) {
+    cards.push(card('Заблокировали', fmtInt(t.blocks),
+      t.messages ? 'на 100 переписок — ' + (t.blocks / t.messages * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : 'после рекламы'));
+  }
+  document.getElementById('cards').innerHTML = cards.join('');
+
+  const warns = [];
+  if (d.partial) warns.push('Часть данных Meta не отдала с первого раза — нажмите «Обновить».');
+  if (d.mixed_currency) warns.push('Кабинеты ведутся в разных валютах — суммы складывать нельзя.');
+  document.getElementById('warn').innerHTML = warns.length
+    ? '<div class="block"><div class="note warn">⚠ ' + warns.join('<br>⚠ ') + '</div></div>' : '';
+
+  const cols = columns(d);
+  table('ageHead', 'ageBody', 'Кто', d.age_gender, ageGenderLabel, cols, t);
+  document.getElementById('ageNote').innerHTML = verdict(d, d.age_gender, ageGenderLabel);
+
+  table('placeHead', 'placeBody', 'Где', d.placements, placeLabel, cols, t);
+  document.getElementById('placeNote').innerHTML = verdict(d, d.placements, placeLabel);
+
+  renderHours(d, cols);
+
+  table('dowHead', 'dowBody', 'День', d.weekdays, x => DOW[x.dow], cols, t);
+  document.getElementById('dowNote').innerHTML = verdict(d, d.weekdays, x => DOW[x.dow]) +
+    ' День — по часовому поясу рекламного кабинета.';
+}
+
+function card(k, v, s) {
+  return '<div class="card"><div class="k">' + esc(k) + '</div>' +
+    '<div class="v">' + v + '</div><div class="s">' + esc(s) + '</div></div>';
+}
+
+/**
+ * Часы: график по каждому часу и таблица по трёхчасовым отрезкам. По
+ * одному часу переписок обычно единицы — таблица по часу была бы шумом,
+ * а на графике видно общую форму дня.
+ */
+function renderHours(d, cols) {
+  const box = document.getElementById('hoursBox');
+  const tz = (d.tz || []);
+  const shifted = tz.some(z => z && z.offset !== 3);
+  const unknown = tz.some(z => !z);
+  document.getElementById('hoursSub').textContent = unknown
+    ? 'по часовому поясу рекламного кабинета'
+    : 'по минскому времени' + (shifted ? ' (пересчитано из пояса кабинета)' : '');
+
+  if (!d.hours || !d.hours.length) {
+    box.innerHTML = '<div class="note">' + (d.hours_failed
+      ? 'Почасовую разбивку Meta в этот раз не отдала — нажмите «Обновить».'
+      : 'Почасовую разбивку Meta не отдала. С 6 августа 2026 года она приходит только ' +
+        'в те рекламные кабинеты, где её включил администратор, — это делается в Ads Manager, ' +
+        'в разбивке отчёта по времени суток. После включения часы появятся здесь сами.') + '</div>';
+    return;
+  }
+
+  const t = d.totals;
+  const spendShare = d.hours.map(x => ratio(x.spend, t.spend) || 0);
+  const msgShare = d.hours.map(x => ratio(x.messages, t.messages) || 0);
+  const max = Math.max(...spendShare, ...msgShare) || 1;
+  box.innerHTML =
+    '<div class="legend"><span><i style="background:#F3DF94"></i>доля расхода</span>' +
+    '<span><i style="background:var(--ink)"></i>доля переписок</span></div>' +
+    '<div class="hours">' + d.hours.map((x, i) =>
+      '<div class="h" title="' + hh(x.hour) + ':00–' + hh((x.hour + 1) % 24) + ':00 · ' +
+        money(x.spend) + ' · ' + fmtInt(x.messages) + ' сообщ.' +
+        (x.messages ? ' · ' + money(x.spend / x.messages) + ' за сообщение' : '') + '">' +
+        '<div class="sp" style="height:' + (spendShare[i] / max * 100).toFixed(1) + '%"></div>' +
+        '<div class="ms" style="height:' + (msgShare[i] / max * 100).toFixed(1) + '%"></div>' +
+      '</div>').join('') + '</div>' +
+    '<div class="hlabels">' + d.hours.map(x => '<span>' + (x.hour % 3 === 0 ? hh(x.hour) : '') + '</span>').join('') + '</div>' +
+    '<div class="table-scroll"><table><thead id="slotHead"></thead><tbody id="slotBody"></tbody></table></div>' +
+    '<div class="note" id="slotNote"></div>';
+
+  // трёхчасовые отрезки: 00–03, 03–06, …
+  const slots = [];
+  for (let s = 0; s < 24; s += 3) {
+    const row = { from: s, spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0,
+      new_chats: 0, blocks: 0, depth2: 0, depth3: 0 };
+    d.hours.slice(s, s + 3).forEach(x => Object.keys(row).forEach(k => {
+      if (k !== 'from') row[k] += x[k] || 0;
+    }));
+    slots.push(row);
+  }
+  const slotLabel = x => hh(x.from) + ':00–' + hh((x.from + 3) % 24) + ':00';
+  table('slotHead', 'slotBody', 'Время', slots, slotLabel, cols, null);
+  document.getElementById('slotNote').innerHTML = verdict(d, slots, slotLabel) +
+    ' Время — когда человек увидел рекламу и откликнулся на неё.';
+}
+
+loadData();
+</script>
+</body>
+</html>

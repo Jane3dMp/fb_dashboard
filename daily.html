@@ -50,6 +50,7 @@
   tr.total td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
   td.name{white-space:normal;min-width:260px;max-width:360px;line-height:1.35}
   td.name small{display:block;color:var(--ink2);font-size:11px;margin-top:1px}
+  td:not(.name) small{color:var(--ink2);font-size:11px;margin-left:2px}
   .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
   .blockhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
   .blockhead h2{margin:0}
@@ -100,6 +101,7 @@
     <a href="kanikuly.html">Каникулы</a>
     <a href="daily.html" class="active">Дни</a>
     <a href="active.html">Сейчас активно</a>
+    <a href="audience.html">Аудитория</a>
     <a href="people.html">Путь клиента</a>
   </nav>
   <div id="updated"></div>
@@ -132,16 +134,11 @@
       <h2 id="tableTitle">По дням</h2>
       <div class="table-scroll">
         <table>
-          <thead><tr>
-            <th>Дата</th><th>Потрачено</th><th>CPC</th><th>Клики<br>ссылка</th>
-            <th>CPM</th><th>Показов</th><th>CTR</th>
-            <th>Клики<br>(все)</th><th>Цена<br>клика (все)</th><th>CTR<br>(все)</th>
-            <th>Сообщений</th><th>Цена<br>сообщ.</th><th>Конв. в<br>сообщ.</th>
-          </tr></thead>
+          <thead id="daysHead"></thead>
           <tbody id="daysBody"></tbody>
         </table>
       </div>
-      <div class="note">«Сообщений» — начатые переписки из рекламы
+      <div class="note" id="daysNote">«Сообщений» — начатые переписки из рекламы
         (messaging_conversation_started в Meta). «Конверсия в сообщения» =
         сообщения ÷ клики по ссылке. Валюта — валюта рекламного кабинета.
         Дни без открутки не показываются.</div>
@@ -230,12 +227,65 @@ async function loadData() {
   }
 }
 
-const TABLE_HEAD = document.querySelector('table thead').innerHTML;
-// колонки те же, меняется только то, что стоит в первом столбце
-const AD_TABLE_HEAD = TABLE_HEAD.replace('<th>Дата</th>', '<th>Объявление</th>');
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const dmy = iso => String(iso || '').split('-').reverse().join('.');
+/** «12 · 80%» — сколько и какая это доля от начатых переписок. */
+const part = (n, total) => !total ? '—' : !n ? '0'
+  : fmtInt(n) + ' <small>' + Math.round(n / total * 100) + '%</small>';
+const freqFmt = f => f ? f.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '—';
+
+// у старого развёртывания этих полей нет — тогда и колонок нет
+const hasField = (d, k) => (d.days || []).some(x => x[k] !== undefined);
+// глубину разговора Meta не документирует: колонку показываем, только
+// если такие действия действительно пришли, иначе пустая колонка
+// читалась бы как «никто не отвечает»
+const hasType = (d, frag) => (d.msg_types || []).some(t => t.indexOf(frag) !== -1);
+const hasReach = d => (d.by_campaign || []).some(c => c.ads.some(a => a.frequency !== undefined));
+
+/** Колонки таблиц: заголовок, значение и когда колонку показывать. */
+const COLS = [
+  { h: 'Потрачено', v: x => money(x.spend) },
+  { h: 'CPC', v: x => money(ratio(x.spend, x.link_clicks)) },
+  { h: 'Клики<br>ссылка', v: x => fmtInt(x.link_clicks) },
+  { h: 'CPM', v: x => money(ratio(x.spend * 1000, x.impressions)) },
+  { h: 'Показов', v: x => fmtInt(x.impressions) },
+  // охват и частота — рядом с показами, из которых они и считаются: в
+  // конце широкой таблицы их не видно без прокрутки
+  { key: 'reach', h: 'Охват', v: x => x.reach ? fmtInt(x.reach) : '—', ads: true,
+    t: 'Сколько разных людей увидели объявление за период' },
+  { key: 'reach', h: 'Частота', v: x => freqFmt(x.frequency), ads: true,
+    t: 'Сколько раз в среднем каждый из них видел объявление за период' },
+  { h: 'CTR', v: x => pct(ratio(x.link_clicks, x.impressions)) },
+  { h: 'Клики<br>(все)', v: x => fmtInt(x.clicks) },
+  { h: 'Цена<br>клика (все)', v: x => money(ratio(x.spend, x.clicks)) },
+  { h: 'CTR<br>(все)', v: x => pct(ratio(x.clicks, x.impressions)) },
+  { h: 'Сообщений', v: x => fmtInt(x.messages) },
+  { h: 'Цена<br>сообщ.', v: x => money(ratio(x.spend, x.messages)) },
+  { h: 'Конв. в<br>сообщ.', v: x => pct(ratio(x.messages, x.link_clicks)) },
+  { key: 'new', h: 'Из них<br>новых', v: x => part(x.new_chats, x.messages),
+    t: 'Написали бизнесу впервые. Остальные писали и раньше — часто это действующие клиенты',
+    need: d => hasField(d, 'new_chats') },
+  { key: 'depth', h: 'Написали<br>2+ раз', v: x => part(x.depth2, x.messages),
+    t: 'Сколько человек не ограничились первым сообщением',
+    need: d => hasType(d, 'messaging_user_depth_2') },
+  { key: 'depth', h: 'Написали<br>3+ раз', v: x => part(x.depth3, x.messages),
+    t: 'Сколько человек отправили три сообщения и больше — переписка дошла до разговора',
+    need: d => hasType(d, 'messaging_user_depth_3') },
+  { key: 'blocks', h: 'Заблоки-<br>ровали', v: x => fmtInt(x.blocks),
+    t: 'Сколько человек после рекламы заблокировали аккаунт',
+    need: d => hasField(d, 'blocks') }
+];
+
+/** Колонки под эти данные: охват и частота — только у объявлений. */
+function visibleCols(d, adsMode) {
+  return COLS.filter(c => (!c.need || c.need(d)) && (!c.ads || (adsMode && hasReach(d))));
+}
+
+function head(first, cols) {
+  return '<tr><th>' + first + '</th>' + cols.map(c =>
+    '<th' + (c.t ? ' title="' + esc(c.t) + '"' : '') + '>' + c.h + '</th>').join('') + '</tr>';
+}
 
 function render(d) {
   lastD = d;
@@ -245,15 +295,13 @@ function render(d) {
   document.getElementById('tableTitle').textContent =
     'По дням · ' + d.since + ' — ' + d.until;
 
+  const cols = visibleCols(d, false);
+  document.getElementById('daysHead').innerHTML = head('Дата', cols);
   const body = document.getElementById('daysBody');
   body.innerHTML = '';
-  d.days.forEach(x => body.appendChild(row(dmy(x.date), x, false)));
-  body.appendChild(row('Итого', sum(d.days), true));
-
-  if (d.mixed_currency) {
-    document.querySelector('.note').textContent =
-      '⚠ Кабинеты ведутся в разных валютах — суммы в таблице складывать нельзя.';
-  }
+  d.days.forEach(x => body.appendChild(row(dmy(x.date), x, false, '', cols)));
+  body.appendChild(row('Итого', sum(d.days), true, '', cols));
+  renderNote(d, cols);
 
   const profiles = d.by_profile || [];
   const campaigns = d.by_campaign || [];
@@ -273,12 +321,39 @@ function render(d) {
   document.querySelector('#content > .block').style.display = mode === 'days' ? '' : 'none';
 }
 
+/** Пояснение под таблицей дней — ровно про те колонки, что показаны. */
+function renderNote(d, cols) {
+  const note = document.getElementById('daysNote');
+  if (d.mixed_currency) {
+    note.textContent = '⚠ Кабинеты ведутся в разных валютах — суммы в таблице складывать нельзя.';
+    return;
+  }
+  const shown = k => cols.some(c => c.key === k);
+  const parts = ['«Сообщений» — начатые переписки из рекламы (messaging_conversation_started ' +
+    'в Meta): человек написал впервые или после недели тишины. «Конверсия в сообщения» = ' +
+    'сообщения ÷ клики по ссылке.'];
+  if (shown('new')) {
+    parts.push('«Из них новых» — написали бизнесу впервые. Остальные писали и раньше, ' +
+      'часто это действующие клиенты, а реклама платит за их переписку как за новую.');
+  }
+  if (shown('depth')) {
+    parts.push('«Написали 2+ / 3+ раз» — сколько человек не остановились на первом ' +
+      'сообщении: переписка дошла до разговора.');
+  }
+  if (shown('blocks')) {
+    parts.push('«Заблокировали» — после рекламы заблокировали аккаунт: объявление раздражает.');
+  }
+  parts.push('Валюта — валюта рекламного кабинета. Дни без открутки не показываются.');
+  note.textContent = parts.join(' ');
+}
+
 /** Шапка режима: заголовок и, если Meta ответила не полностью, предупреждение. */
-function modeHead(title, d) {
+function modeHead(title, d, extra) {
   const head = document.createElement('div');
   head.className = 'block';
   head.innerHTML = '<h2>' + title + ' · ' + d.since + ' — ' + d.until + '</h2>' +
-    (d.partial ? '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите на период ещё раз, чтобы перезапросить.</div>' : '');
+    (d.partial ? '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите на период ещё раз, чтобы перезапросить.</div>' : '') +
+    (extra ? '<div class="note">' + extra + '</div>' : '');
   return head;
 }
 
@@ -288,15 +363,16 @@ function renderProfiles(d, profiles) {
   holder.innerHTML = '';
   if (mode !== 'profiles' || !profiles.length) return;
   holder.appendChild(modeHead('По профилям', d));
+  const cols = visibleCols(d, false);
   profiles.forEach(p => {
     const block = document.createElement('div');
     block.className = 'block';
     const tot = sum(p.days);
     block.innerHTML = '<h2>' + esc(p.profile) + ' · потрачено ' + money(tot.spend) + '</h2>' +
-      '<div class="table-scroll"><table><thead>' + TABLE_HEAD + '</thead><tbody></tbody></table></div>';
+      '<div class="table-scroll"><table><thead>' + head('Дата', cols) + '</thead><tbody></tbody></table></div>';
     const tb = block.querySelector('tbody');
-    p.days.forEach(x => tb.appendChild(row(dmy(x.date), x, false)));
-    tb.appendChild(row('Итого', tot, true));
+    p.days.forEach(x => tb.appendChild(row(dmy(x.date), x, false, '', cols)));
+    tb.appendChild(row('Итого', tot, true, '', cols));
     holder.appendChild(block);
   });
 }
@@ -311,7 +387,13 @@ function renderAds(d, campaigns) {
   const holder = document.getElementById('adsBlocks');
   holder.innerHTML = '';
   if (mode !== 'ads' || !campaigns.length) return;
-  holder.appendChild(modeHead('По объявлениям', d));
+  const cols = visibleCols(d, true);
+  holder.appendChild(modeHead('По объявлениям', d, !hasReach(d) ? '' :
+    '«Охват» — сколько разных людей увидели объявление за период, «Частота» — сколько ' +
+    'раз в среднем каждый. Город небольшой, аудитория родителей быстро заканчивается: ' +
+    'частота 3–4 за неделю и выше — люди устают от креатива, и переписка дорожает. ' +
+    'Что выгорает прямо сейчас, показывает страница «Сейчас активно».' +
+    (d.reach_missing ? ' Охват и частоту Meta в этот раз отдала не по всем объявлениям.' : '')));
   campaigns.forEach(c => {
     const block = document.createElement('div');
     block.className = 'block';
@@ -321,7 +403,7 @@ function renderAds(d, campaigns) {
     block.innerHTML =
       '<div class="blockhead"><h2>' + esc(c.campaign_name) + '</h2>' +
       '<span class="sub">потрачено ' + money(c.totals.spend) + '</span>' + live + '</div>' +
-      '<div class="table-scroll"><table><thead>' + AD_TABLE_HEAD + '</thead><tbody></tbody></table></div>';
+      '<div class="table-scroll"><table><thead>' + head('Объявление', cols) + '</thead><tbody></tbody></table></div>';
     const tb = block.querySelector('tbody');
     c.ads.forEach(a => {
       const period = a.first_date === a.last_date
@@ -330,44 +412,32 @@ function renderAds(d, campaigns) {
       const meta = [a.adset_name, a.profile, period].filter(Boolean).map(esc).join(' · ');
       const title = (a.active ? '<span class="live" title="крутится сейчас"></span>' : '') +
         esc(a.ad_name);
-      tb.appendChild(row(adCell(a.thumb, title, meta), a, false, 'name'));
+      tb.appendChild(row(adCell(a.thumb, title, meta), a, false, 'name', cols));
     });
-    tb.appendChild(row('Итого по кампании', c.totals, true, 'name'));
+    // охват и частоту по кампании не сложить из объявлений — там прочерк
+    tb.appendChild(row('Итого по кампании', c.totals, true, 'name', cols));
     holder.appendChild(block);
   });
 }
 
+const SUM_KEYS = ['spend', 'impressions', 'clicks', 'link_clicks', 'messages',
+  'new_chats', 'blocks', 'depth2', 'depth3'];
+
 function sum(rows) {
-  const t = { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
-  rows.forEach(x => {
-    t.spend += x.spend; t.impressions += x.impressions; t.clicks += x.clicks;
-    t.link_clicks += x.link_clicks; t.messages += x.messages;
-  });
+  const t = {};
+  SUM_KEYS.forEach(k => { t[k] = 0; });
+  rows.forEach(x => SUM_KEYS.forEach(k => { t[k] += x[k] || 0; }));
   return t;
 }
 
-function row(label, x, isTotal, firstClass) {
+function row(label, x, isTotal, firstClass, cols) {
   const tr = document.createElement('tr');
   if (isTotal) tr.className = 'total';
-  const cells = [
-    label,
-    money(x.spend),
-    money(ratio(x.spend, x.link_clicks)),
-    fmtInt(x.link_clicks),
-    money(ratio(x.spend * 1000, x.impressions)),
-    fmtInt(x.impressions),
-    pct(ratio(x.link_clicks, x.impressions)),
-    fmtInt(x.clicks),
-    money(ratio(x.spend, x.clicks)),
-    pct(ratio(x.clicks, x.impressions)),
-    fmtInt(x.messages),
-    money(ratio(x.spend, x.messages)),
-    pct(ratio(x.messages, x.link_clicks)),
-  ];
-  tr.innerHTML = cells.map((c, i) => {
-    if (i === 0) return '<td class="' + (firstClass || '') + '">' + c + '</td>';
-    return '<td class="' + (c === '—' || c === '0' ? 'zero' : '') + '">' + c + '</td>';
-  }).join('');
+  tr.innerHTML = '<td class="' + (firstClass || '') + '">' + label + '</td>' +
+    cols.map(col => {
+      const c = col.v(x);
+      return '<td class="' + (c === '—' || c === '0' ? 'zero' : '') + '">' + c + '</td>';
+    }).join('');
   return tr;
 }
 

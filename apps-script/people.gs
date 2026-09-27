@@ -1538,10 +1538,44 @@ function pplGraph_(pathOrUrl) {
   return JSON.parse(resp.getContentText());
 }
 
-/** Пустая строка-накопитель метрик Insights. */
+/**
+ * Пустая строка-накопитель метрик Insights. Глубины разговора (depth2,
+ * depth3) здесь нет: она появляется в строке, только если Meta её
+ * прислала, — иначе два нуля в каждой строке «Дней» зря съедали бы
+ * место под потолком кэша в 100 КБ.
+ */
 function pplZeroMetrics_() {
-  return { spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0 };
+  return {
+    spend: 0, impressions: 0, clicks: 0, link_clicks: 0, messages: 0,
+    // качество переписок: см. PPL_MSG_ACTIONS
+    new_chats: 0, blocks: 0
+  };
 }
+
+/**
+ * Какие действия Meta в какую метрику накопителя.
+ *
+ * «Сообщений» — начатые переписки (messaging_conversation_started_7d:
+ * человек написал после недели тишины или впервые). Из них «новых» —
+ * messaging_first_reply, те, кто не писал бизнесу никогда: разница — это
+ * вернувшиеся, часто действующие клиенты. Блокировки — messaging_block.
+ *
+ * Счётчиков глубины разговора (2 и 3+ сообщений от человека) в
+ * документации Meta нет, хотя в ответах они встречаются. Берём, если
+ * пришли; какие виды действий Meta прислала на самом деле, отчёт
+ * отдаёт в msg_types, и страница показывает колонку только тогда.
+ */
+const PPL_MSG_ACTIONS = [
+  ['messages', 'messaging_conversation_started'],
+  ['new_chats', 'messaging_first_reply'],
+  ['blocks', 'messaging_block'],
+  ['depth2', 'messaging_user_depth_2_message_send'],
+  ['depth3', 'messaging_user_depth_3_message_send']
+];
+
+/** Всё, что складывается: деньги, показы, клики и все переписочные метрики. */
+const PPL_SUM_KEYS = ['spend', 'impressions', 'clicks', 'link_clicks']
+  .concat(PPL_MSG_ACTIONS.map(function (m) { return m[0]; }));
 
 /**
  * Приплюсовывает к накопителю одну строку Insights. Вынесено из четырёх
@@ -1554,21 +1588,89 @@ function pplAddMetrics_(row, r) {
   row.clicks += Number(r.clicks || 0);
   row.link_clicks += Number(r.inline_link_clicks || 0);
   (r.actions || []).forEach(function (a) {
-    if (String(a.action_type).indexOf('messaging_conversation_started') !== -1) {
-      row.messages += Number(a.value || 0);
-    }
+    const type = String(a.action_type);
+    PPL_MSG_ACTIONS.forEach(function (m) {
+      if (type.indexOf(m[1]) !== -1) row[m[0]] = (row[m[0]] || 0) + Number(a.value || 0);
+    });
   });
   return row;
 }
 
-/** Сумма метрик по списку строк. */
+/**
+ * Сумма метрик по списку строк. Охват и частота в неё не входят: один
+ * человек видит несколько объявлений, и сумма охватов его пересчитает.
+ */
 function pplSumMetrics_(rows) {
   const t = pplZeroMetrics_();
   rows.forEach(function (r) {
-    t.spend += r.spend; t.impressions += r.impressions; t.clicks += r.clicks;
-    t.link_clicks += r.link_clicks; t.messages += r.messages;
+    PPL_SUM_KEYS.forEach(function (k) {
+      if (r[k] !== undefined) t[k] = (t[k] || 0) + Number(r[k] || 0);
+    });
   });
   return t;
+}
+
+/**
+ * a − b по всем метрикам: неделя до последней = 14 дней минус 7. Так обе
+ * недели считаются в часовом поясе кабинета, как в Ads Manager, а не в
+ * нашем. Копеечные расхождения округления не должны давать минус.
+ */
+function pplMinusMetrics_(a, b) {
+  const t = pplZeroMetrics_();
+  PPL_SUM_KEYS.forEach(function (k) {
+    if (a[k] === undefined && t[k] === undefined) return;
+    t[k] = Math.max(0, Number(a[k] || 0) - Number(b[k] || 0));
+  });
+  t.spend = Math.round(t.spend * 100) / 100;
+  return t;
+}
+
+/** Какие «переписочные» действия Meta прислала вообще — для сверки колонок. */
+function pplMsgTypes_(rows) {
+  const seen = {};
+  rows.forEach(function (r) {
+    (r.actions || []).forEach(function (a) {
+      const t = String(a.action_type || '');
+      if (t.indexOf('messaging') !== -1) seen[t] = true;
+    });
+  });
+  return Object.keys(seen).sort();
+}
+
+/**
+ * Несколько GET к Graph API разом: UrlFetchApp.fetchAll шлёт их
+ * параллельно. Разрезы и сравнение недель — пачки независимых запросов,
+ * и по очереди они складывались в лишние десять секунд ожидания.
+ * На место каждого пути — разобранное тело или null, как у pplGraph_.
+ */
+function pplGraphAll_(paths) {
+  if (!paths.length) return [];
+  const token = encodeURIComponent(pplProp_('FB_TOKEN'));
+  return UrlFetchApp.fetchAll(paths.map(function (p) {
+    return {
+      url: 'https://graph.facebook.com/' + FB_API_VERSION + '/' + p +
+        (p.indexOf('?') === -1 ? '?' : '&') + 'access_token=' + token,
+      muteHttpExceptions: true
+    };
+  })).map(function (resp) {
+    return resp.getResponseCode() === 200 ? JSON.parse(resp.getContentText()) : null;
+  });
+}
+
+/**
+ * Все строки ответа Insights: первая страница уже на руках, остальные —
+ * по paging.next. ok = false, если Meta не отдала хоть одну страницу.
+ */
+function pplGraphRows_(body, maxPages) {
+  const out = { rows: [], ok: !!body };
+  for (let page = 0; body && page < (maxPages || 5); page++) {
+    (body.data || []).forEach(function (r) { out.rows.push(r); });
+    const next = body.paging && body.paging.next;
+    if (!next) break;
+    body = pplGraph_(next);
+    if (!body) out.ok = false;
+  }
+  return out;
 }
 
 /** Бюджет Meta приходит в копейках/центах строкой. */
@@ -1789,8 +1891,9 @@ function pplDiagActive() {
  * человек из рекламы начал переписку. Производные метрики (CPC, CPM,
  * CTR, цена сообщения) страница считает сама из сырых чисел.
  *
- * part=active отдаёт другой отчёт — «что крутится прямо сейчас». Он
- * висит на том же view намеренно: маршрутизация видов живёт в Код.gs,
+ * part=active отдаёт другой отчёт — «что крутится прямо сейчас», а
+ * part=audience — разрезы по возрасту, месту показа и времени. Они
+ * висят на том же view намеренно: маршрутизация видов живёт в Код.gs,
  * которого нет в репозитории, и каждый новый view — ещё один файл,
  * который надо править вслепую в онлайн-редакторе. Тут же деплоится
  * один people.gs.
@@ -1798,6 +1901,7 @@ function pplDiagActive() {
 function pplBuildDaily(params) {
   params = params || {};
   if (params.part === 'active') return pplBuildActive(params);
+  if (params.part === 'audience') return pplBuildAudience(params);
   const until = params.until || pplIsoDate_(new Date());
   const since = params.since || until.slice(0, 8) + '01';   // по умолчанию с начала месяца
 
@@ -1859,6 +1963,27 @@ function pplBuildDaily(params) {
     if (adIds.indexOf(r.ad_id) === -1) adIds.push(r.ad_id);
   });
   const map = pplIgProfileMap_(adIds);
+
+  // Охват и частота каждого объявления за весь период. Из дневных строк
+  // их не сложить: один и тот же человек видит объявление много дней
+  // подряд. Не пришли — отчёт не «частичный», просто колонка пустая:
+  // иначе разовый сбой этого запроса лишал бы кэша весь отчёт.
+  const reachByAd = {};
+  let reachMissing = false;
+  pplGraphAll_(pplAdAccounts_().map(function (acct) {
+    return acct + '/insights?level=ad&fields=ad_id,reach,frequency' +
+      '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
+      '&limit=500';
+  })).forEach(function (body) {
+    const res = pplGraphRows_(body, 6);
+    if (!res.ok) reachMissing = true;
+    res.rows.forEach(function (r) {
+      reachByAd[r.ad_id] = {
+        reach: Number(r.reach || 0),
+        frequency: Math.round(Number(r.frequency || 0) * 100) / 100
+      };
+    });
+  });
 
   const byProfile = {};
   perAd.forEach(function (r) {
@@ -1933,6 +2058,8 @@ function pplBuildDaily(params) {
     c.ads.sort(function (x, y) { return y.spend - x.spend; });
     c.ads.forEach(function (a) {
       a.thumb = thumbs[a.ad_id] || '';
+      const rf = reachByAd[a.ad_id];
+      if (rf) { a.reach = rf.reach; a.frequency = rf.frequency; }
       // название кампании уже есть у самой кампании, а profile_id странице
       // не нужен: на длинном периоде объявлений сотни, и лишние поля
       // пробивают 100 КБ — потолок значения в CacheService
@@ -1954,6 +2081,8 @@ function pplBuildDaily(params) {
     days: days,
     by_profile: profiles,
     by_campaign: campaigns,
+    msg_types: pplMsgTypes_(perAd),
+    reach_missing: reachMissing,
     partial: partial
   };
   try {
@@ -1964,6 +2093,59 @@ function pplBuildDaily(params) {
 }
 
 /* ============ 3d. Что крутится прямо сейчас ============ */
+
+/** Пороги выгорания креатива — см. pplBurnout_. */
+const PPL_FREQ_TIRED = 3;        // частота за 7 дней, при которой подорожание — уже усталость
+const PPL_FREQ_HIGH = 4.5;       // …а при этой тревожно и без подорожания
+const PPL_COST_GROWTH = 0.3;     // сообщение подорожало на 30% и больше
+const PPL_CTR_DROP = 0.3;        // кликают на 30% реже (для объявлений без переписок)
+const PPL_BURN_MIN_IMPR = 1000;  // меньше показов за неделю — судить не по чему
+const PPL_BURN_MIN_MSG = 3;      // сообщений неделей раньше, чтобы было с чем сравнить цену
+
+/**
+ * Выгорает ли объявление.
+ *
+ * Город небольшой: родители из аудитории быстро заканчиваются, одни и те
+ * же люди видят рекламу по 4–5 раз за неделю, и переписка дорожает.
+ * Сигнал — связка «частота высокая И стало хуже, чем неделей раньше»:
+ * высокая частота при прежней цене — ещё не беда, а подорожание при
+ * низкой частоте — скорее аукцион или сезон, креатив тут ни при чём.
+ *
+ * Для объявлений на переписку судим по цене сообщения; CTR — только
+ * когда переписок нет и сравнивать цену не с чем: подешевевшее сообщение
+ * при упавшем CTR — не выгорание.
+ *
+ * week — последние 7 полных дней (с frequency), prev — 7 дней до них.
+ * Возвращает { level: 'hot' | 'warn' | '', reason }.
+ */
+function pplBurnout_(week, prev) {
+  const none = { level: '', reason: '' };
+  const freq = Number(week.frequency || 0);
+  if (Number(week.impressions || 0) < PPL_BURN_MIN_IMPR || freq < PPL_FREQ_TIRED) return none;
+  const f = 'частота ' + freq.toFixed(1).replace('.', ',');
+
+  const prevCost = prev.messages >= PPL_BURN_MIN_MSG ? prev.spend / prev.messages : 0;
+  if (prevCost) {
+    if (!week.messages) {
+      // сообщений не стало вовсе, а денег ушло как на два прежних
+      if (week.spend >= 2 * prevCost) return { level: 'hot', reason: f + ', а сообщений за неделю ни одного' };
+    } else {
+      const growth = week.spend / week.messages / prevCost - 1;
+      if (growth >= PPL_COST_GROWTH) {
+        return { level: 'hot', reason: f + ', сообщение подорожало на ' + Math.round(growth * 100) + '%' };
+      }
+    }
+  } else if (!week.messages && prev.impressions >= PPL_BURN_MIN_IMPR && prev.link_clicks) {
+    const drop = 1 - (week.link_clicks / week.impressions) / (prev.link_clicks / prev.impressions);
+    if (drop >= PPL_CTR_DROP) {
+      return { level: 'hot', reason: f + ', кликают на ' + Math.round(drop * 100) + '% реже' };
+    }
+  }
+  if (freq >= PPL_FREQ_HIGH) {
+    return { level: 'warn', reason: f + ': одни и те же люди видят объявление почти каждый день' };
+  }
+  return none;
+}
 
 /**
  * Отчёт «Сейчас активно» (view=daily&part=active): дерево
@@ -1989,7 +2171,7 @@ function pplBuildActive(params) {
   let currency = '', mixed = false, partial = false;
   const campaigns = {};       // campaign_id → кампания с группами и объявлениями
   const adIds = [];
-  const today = {}, week = {};   // ad_id → метрики
+  const today = {}, week = {}, twoWeeks = {};   // ad_id → метрики
   const nowMs = Date.now();
   let finished = 0;           // отсеяно как «уже отработало»
   let blocked = 0;            // включено, но кабинет не доставляет
@@ -2056,20 +2238,29 @@ function pplBuildActive(params) {
       url = body.paging && body.paging.next ? body.paging.next : null;
     }
 
-    // 2. цифры: сегодня и за последние 7 дней
-    ['today', 'last_7d'].forEach(function (preset) {
-      let u = acct + '/insights?level=ad&date_preset=' + preset +
-        '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions&limit=500';
-      const bucket = preset === 'today' ? today : week;
-      for (let page = 0; page < 5 && u; page++) {
-        const body = pplGraph_(u);
-        if (!body) { partial = true; break; }
-        (body.data || []).forEach(function (r) {
-          if (!bucket[r.ad_id]) bucket[r.ad_id] = pplZeroMetrics_();
-          pplAddMetrics_(bucket[r.ad_id], r);
-        });
-        u = body.paging && body.paging.next ? body.paging.next : null;
-      }
+    // 2. цифры: сегодня, 7 и 14 дней — три запроса разом. 14 дней нужны
+    // только ради недели до последней (см. pplMinusMetrics_), а охват с
+    // частотой — ради выгорания (pplBurnout_)
+    const presets = [
+      ['today', today, ''],
+      ['last_7d', week, ',reach,frequency'],
+      ['last_14d', twoWeeks, '']
+    ];
+    pplGraphAll_(presets.map(function (p) {
+      return acct + '/insights?level=ad&date_preset=' + p[0] +
+        '&fields=ad_id,spend,impressions,clicks,inline_link_clicks,actions' + p[2] + '&limit=500';
+    })).forEach(function (body, i) {
+      const bucket = presets[i][1];
+      const res = pplGraphRows_(body, 5);
+      if (!res.ok) partial = true;
+      res.rows.forEach(function (r) {
+        if (!bucket[r.ad_id]) bucket[r.ad_id] = pplZeroMetrics_();
+        pplAddMetrics_(bucket[r.ad_id], r);
+        if (r.frequency !== undefined) {
+          bucket[r.ad_id].reach = Number(r.reach || 0);
+          bucket[r.ad_id].frequency = Math.round(Number(r.frequency || 0) * 100) / 100;
+        }
+      });
     });
   });
 
@@ -2087,10 +2278,13 @@ function pplBuildActive(params) {
         a.thumb = thumbs[a.ad_id] || '';
         a.today = today[a.ad_id] || pplZeroMetrics_();
         a.week = week[a.ad_id] || pplZeroMetrics_();
+        a.prev = pplMinusMetrics_(twoWeeks[a.ad_id] || pplZeroMetrics_(), a.week);
+        a.burnout = pplBurnout_(a.week, a.prev);
         return a;
       }).sort(function (x, y) { return y.week.spend - x.week.spend; });
       s.today = pplSumMetrics_(s.ads.map(function (a) { return a.today; }));
       s.week = pplSumMetrics_(s.ads.map(function (a) { return a.week; }));
+      s.prev = pplSumMetrics_(s.ads.map(function (a) { return a.prev; }));
       return s;
     }).sort(function (x, y) { return y.week.spend - x.week.spend; });
 
@@ -2105,9 +2299,19 @@ function pplBuildActive(params) {
       adsets: adsets,
       ads_count: adsets.reduce(function (t, s) { return t + s.ads.length; }, 0),
       today: pplSumMetrics_(adsets.map(function (s) { return s.today; })),
-      week: pplSumMetrics_(adsets.map(function (s) { return s.week; }))
+      week: pplSumMetrics_(adsets.map(function (s) { return s.week; })),
+      prev: pplSumMetrics_(adsets.map(function (s) { return s.prev; }))
     };
   }).sort(function (a, b) { return b.week.spend - a.week.spend; });
+
+  // выгорание считаем только у того, что кабинет реально показывает
+  const burnt = { hot: 0, warn: 0 };
+  out_campaigns.forEach(function (c) {
+    if (!c.account_ok) return;
+    c.adsets.forEach(function (s) {
+      s.ads.forEach(function (a) { if (burnt[a.burnout.level] !== undefined) burnt[a.burnout.level]++; });
+    });
+  });
 
   const out = {
     view: 'active',
@@ -2128,7 +2332,10 @@ function pplBuildActive(params) {
       ads_blocked: blocked,
       daily_budget: out_campaigns.reduce(function (t, c) { return t + c.daily_budget; }, 0),
       today: pplSumMetrics_(out_campaigns.map(function (c) { return c.today; })),
-      week: pplSumMetrics_(out_campaigns.map(function (c) { return c.week; }))
+      week: pplSumMetrics_(out_campaigns.map(function (c) { return c.week; })),
+      prev: pplSumMetrics_(out_campaigns.map(function (c) { return c.prev; })),
+      burnout_hot: burnt.hot,
+      burnout_warn: burnt.warn
     },
     partial: partial
   };
@@ -2137,6 +2344,190 @@ function pplBuildActive(params) {
     const json = JSON.stringify(out);
     if (!partial && json.length < 100000) cache.put('active_now', json, 300);
   } catch (e) {}
+  return out;
+}
+
+/* ============ 3e. Кому и где: разрезы аудитории ============ */
+
+/** Часы на странице — по Минску: UTC+3 круглый год, без перевода часов. */
+const PPL_LOCAL_UTC_OFFSET = 3;
+
+/**
+ * Разрезы рекламы за период (view=daily&part=audience): возраст и пол,
+ * площадка и место показа, час дня и день недели — где переписка
+ * обходится дешевле и куда деньги уходят впустую.
+ *
+ * Всё на уровне кабинета: вопрос «кому и где показывать» решается в
+ * группах объявлений, а разрез каждого объявления в таблицу не влезет.
+ * Восемь запросов (4 разреза × 2 кабинета) уходят разом через fetchAll.
+ *
+ * Почасовую разбивку с 6 августа 2026 года Meta отдаёт не всем кабинетам:
+ * где её не включили в Ads Manager, приходит пустой ответ с кодом 200.
+ * Поэтому пустые часы — это флаг hours_missing, а сбой именно этого
+ * запроса не делает отчёт частичным: иначе тот не попадал бы в кэш никогда.
+ */
+function pplBuildAudience(params) {
+  params = params || {};
+  const until = params.until || pplIsoDate_(new Date());
+  const since = params.since || pplIsoDate_(pplDaysAgo_(29));
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'aud_' + since + '_' + until;
+  if (params.nocache !== '1') {
+    const hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+  }
+
+  const CUTS = [
+    'breakdowns=age,gender',
+    'breakdowns=publisher_platform,platform_position',
+    'breakdowns=hourly_stats_aggregated_by_advertiser_time_zone',
+    'time_increment=1'
+  ];
+  const AGE = 0, PLACE = 1, HOUR = 2;
+  const accts = pplAdAccounts_();
+  const tz = pplAccountTz_();
+  const range = encodeURIComponent(JSON.stringify({ since: since, until: until }));
+  const paths = [];
+  accts.forEach(function (acct) {
+    CUTS.forEach(function (cut) {
+      paths.push(acct + '/insights?level=account&' + cut +
+        '&fields=spend,impressions,clicks,inline_link_clicks,actions,account_currency' +
+        '&time_range=' + range + '&limit=500');
+    });
+  });
+
+  const ageGender = {}, places = {}, hours = {}, weekdays = {};
+  const dayRows = [];
+  let currency = '', mixed = false, partial = false, hoursFailed = false, hourRows = 0;
+  pplGraphAll_(paths).forEach(function (body, i) {
+    const acct = accts[Math.floor(i / CUTS.length)];
+    const cut = i % CUTS.length;
+    const res = pplGraphRows_(body, 5);
+    if (!res.ok) {
+      if (cut === HOUR) hoursFailed = true;
+      else partial = true;
+    }
+    res.rows.forEach(function (r) {
+      const cur = String(r.account_currency || '');
+      if (cur) {
+        if (!currency) currency = cur;
+        else if (currency !== cur) mixed = true;
+      }
+      if (cut === AGE) {
+        pplBucket_(ageGender, r.age + '|' + r.gender, { age: r.age || '', gender: r.gender || '' }, r);
+      } else if (cut === PLACE) {
+        pplBucket_(places, r.publisher_platform + '|' + r.platform_position,
+          { platform: r.publisher_platform || '', position: r.platform_position || '' }, r);
+      } else if (cut === HOUR) {
+        const h = pplLocalHour_(r.hourly_stats_aggregated_by_advertiser_time_zone, (tz[acct] || {}).offset);
+        if (h === null) return;
+        hourRows++;
+        pplBucket_(hours, h, { hour: h }, r);
+      } else {
+        dayRows.push(r);
+        const dow = pplWeekday_(r.date_start);
+        pplBucket_(weekdays, dow, { dow: dow }, r);
+      }
+    });
+  });
+
+  const values = function (map) { return Object.keys(map).map(function (k) { return map[k]; }); };
+  // пустые часы и дни — нулями: на графике дыра должна быть видна как ноль
+  const filled = function (map, keys, field) {
+    return keys.map(function (k) {
+      if (map[k]) return map[k];
+      const z = pplZeroMetrics_();
+      z[field] = k;
+      return z;
+    });
+  };
+  // итог — по дневным строкам: у разрезов Meta прячет мелкие ячейки
+  // (например, возраст «неизвестен»), и их суммы чуть меньше настоящих
+  const totals = pplZeroMetrics_();
+  dayRows.forEach(function (r) { pplAddMetrics_(totals, r); });
+
+  const out = {
+    view: 'audience',
+    since: since,
+    until: until,
+    updated: new Date().toISOString(),
+    currency: currency,
+    mixed_currency: mixed,
+    totals: totals,
+    age_gender: values(ageGender).sort(pplAgeGenderOrder_),
+    placements: values(places).sort(function (a, b) { return b.spend - a.spend; }),
+    hours: hourRows ? filled(hours, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+      17, 18, 19, 20, 21, 22, 23], 'hour') : [],
+    hours_missing: !hourRows && !hoursFailed && totals.spend > 0,
+    hours_failed: hoursFailed,
+    weekdays: filled(weekdays, [1, 2, 3, 4, 5, 6, 7], 'dow'),
+    tz: accts.map(function (a) { return tz[a] || null; }),
+    msg_types: pplMsgTypes_(dayRows),
+    partial: partial
+  };
+  try {
+    const json = JSON.stringify(out);
+    if (!partial && json.length < 100000) cache.put(cacheKey, json, 600);
+  } catch (e) {}
+  return out;
+}
+
+/** Накопитель разреза: строка на ключ, метрики складываются. */
+function pplBucket_(map, key, base, r) {
+  if (!map[key]) {
+    map[key] = pplZeroMetrics_();
+    Object.keys(base).forEach(function (k) { map[key][k] = base[k]; });
+  }
+  pplAddMetrics_(map[key], r);
+}
+
+/** Возраст по порядку («18-24» раньше «25-34», неизвестный в конце), внутри — женщины, мужчины. */
+function pplAgeGenderOrder_(a, b) {
+  const age = function (s) { const n = parseInt(s, 10); return isFinite(n) ? n : 999; };
+  const sex = function (g) { return g === 'female' ? 0 : g === 'male' ? 1 : 2; };
+  return age(a.age) - age(b.age) || sex(a.gender) - sex(b.gender);
+}
+
+/**
+ * Час показа из разбивки Meta («14:00:00 - 14:59:59» в часовом поясе
+ * кабинета) → час по Минску. Смещение кабинета неизвестно — час как есть.
+ */
+function pplLocalHour_(slot, offset) {
+  const h = parseInt(String(slot || '').slice(0, 2), 10);
+  if (!isFinite(h)) return null;
+  const shift = typeof offset === 'number' && isFinite(offset) ? PPL_LOCAL_UTC_OFFSET - offset : 0;
+  return ((Math.floor(h + shift) % 24) + 24) % 24;
+}
+
+/** День недели даты «YYYY-MM-DD»: 1 — понедельник … 7 — воскресенье. */
+function pplWeekday_(iso) {
+  const d = new Date(String(iso) + 'T00:00:00Z').getUTCDay();
+  return d === 0 ? 7 : d;
+}
+
+/**
+ * Часовой пояс каждого кабинета: { act_…: { name, offset } | null }.
+ * Отдельным запросом, а не в pplAccountStatuses_: если Meta однажды не
+ * поймёт эти поля, сломаться должны часы на «Аудитории», а не красная
+ * плашка остановленного кабинета. Пояс меняют редко — кэш 6 часов.
+ */
+function pplAccountTz_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('acct_tz');
+  if (hit) return JSON.parse(hit);
+  const accts = pplAdAccounts_();
+  const out = {};
+  let complete = true;
+  pplGraphAll_(accts.map(function (a) { return a + '?fields=timezone_name,timezone_offset_hours_utc'; }))
+    .forEach(function (body, i) {
+      const offset = body ? Number(body.timezone_offset_hours_utc) : NaN;
+      out[accts[i]] = body && isFinite(offset) ? { name: body.timezone_name || '', offset: offset } : null;
+      if (!out[accts[i]]) complete = false;
+    });
+  if (complete) {
+    try { cache.put('acct_tz', JSON.stringify(out), 21600); } catch (e) {}
+  }
   return out;
 }
 

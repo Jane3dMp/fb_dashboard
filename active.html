@@ -62,6 +62,11 @@
   .note.alarm{background:#FBE4E1;border:1px solid #F0BDB6}
   .note.alarm b{color:var(--red)}
   .paused{color:var(--red);font-weight:600}
+  .pill{display:inline-block;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:100px;margin-left:6px;vertical-align:1px;white-space:nowrap}
+  .pill.hot{background:#FBE4E1;color:var(--red)}
+  .pill.warn{background:var(--yellow-soft);color:#6b5d1a}
+  td.up{color:var(--red)}
+  .card.hot .v{color:var(--red)}
 
   #status{max-width:1160px;margin:0 auto;padding:30px 24px;color:var(--ink2)}
   #status.error{color:var(--red)}
@@ -107,6 +112,7 @@
     <a href="kanikuly.html">Каникулы</a>
     <a href="daily.html">Дни</a>
     <a href="active.html" class="active">Сейчас активно</a>
+    <a href="audience.html">Аудитория</a>
     <a href="people.html">Путь клиента</a>
   </nav>
   <div id="updated"></div>
@@ -140,6 +146,15 @@
       Показы глушит и сам кабинет — непрошедший платёж или упёршийся лимит
       затрат; в этом случае сверху висит красная плашка, а объявления такого
       кабинета в «крутится сейчас» не считаются.</div>
+    <div class="note" id="burnNote" style="display:none">«Частота» — сколько раз
+      в среднем один человек увидел объявление за последние 7 дней. Город
+      небольшой, аудитория родителей быстро заканчивается, и одни и те же люди
+      видят рекламу снова и снова. <b>«Выгорает»</b> — частота 3 и выше, а
+      сообщение подорожало на 30% и больше по сравнению с неделей до этого
+      (у объявлений без переписок — кликают на 30% реже): креатив надоел, его
+      пора менять или расширять аудиторию. <b>«Частота высокая»</b> — 4,5 и
+      выше без подорожания: пока терпимо, но стоит присмотреться. Меньше
+      1000 показов за неделю — не судим, случайностей слишком много.</div>
   </div>
 </div>
 
@@ -206,6 +221,9 @@ function render(d) {
 
   const t = d.totals;
   const blocked = t.ads_blocked || 0;
+  // сравнение недель и выгорание есть только у нового бэкенда
+  withBurn = t.prev !== undefined;
+  document.getElementById('burnNote').style.display = withBurn ? '' : 'none';
   document.getElementById('cards').innerHTML = [
     card('Крутится сейчас', fmtInt(t.ads) + ' ' + (t.ads === 1 ? 'объявление' : 'объяв.'),
       blocked
@@ -217,7 +235,14 @@ function render(d) {
       fmtInt(t.today.messages) + ' сообщений · ' + fmtInt(t.today.link_clicks) + ' кликов'),
     card('За 7 дней', money(t.week.spend),
       fmtInt(t.week.messages) + ' сообщений · ' + fmtInt(t.week.link_clicks) + ' кликов'),
-    card('Цена сообщения', money(ratio(t.week.spend, t.week.messages)), 'за последние 7 дней')
+    card('Цена сообщения', money(ratio(t.week.spend, t.week.messages)),
+      withBurn ? 'за 7 дней · неделей раньше ' + money(ratio(t.prev.spend, t.prev.messages)) : 'за последние 7 дней'),
+    withBurn ? card('Выгорают', fmtInt(t.burnout_hot),
+      [t.burnout_hot ? 'пора менять креатив' : 'по частоте и цене сообщения — норма',
+       t.burnout_warn ? 'у ' + plural(t.burnout_warn, ['объявления', 'объявлений', 'объявлений']) +
+         ' частота высокая' : '']
+        .filter(Boolean).join(' · '),
+      t.burnout_hot ? 'hot' : '') : ''
   ].join('');
 
   // Ads Manager такие зовёт «Завершено», а API — по-прежнему ACTIVE.
@@ -277,6 +302,10 @@ function render(d) {
         '<th>Кликов<br>сегодня</th><th>Сообщ.<br>сегодня</th>' +
         '<th>7 дней</th><th>Кликов<br>7 дней</th><th>Сообщ.<br>7 дней</th>' +
         '<th>Цена сообщ.<br>7 дней</th>' +
+        (withBurn
+          ? '<th title="Та же цена за 7 дней до этого">Неделей<br>раньше</th>' +
+            '<th title="Сколько раз в среднем один человек увидел объявление за 7 дней">Частота<br>7 дней</th>'
+          : '') +
       '</tr></thead><tbody></tbody></table></div>';
     const tb = block.querySelector('tbody');
 
@@ -288,7 +317,13 @@ function render(d) {
       tb.appendChild(row(
         esc(s.adset_name) + (sub ? '<small>' + sub + '</small>' : ''), s, 'grp'));
       s.ads.forEach(a => {
-        tb.appendChild(row(adCell(a.thumb, esc(a.ad_name), esc(a.profile)), a, ''));
+        const b = a.burnout || {};
+        const pill = b.level
+          ? '<span class="pill ' + b.level + '" title="' + esc(b.reason) + '">' +
+            (b.level === 'hot' ? 'выгорает' : 'частота высокая') + '</span>'
+          : '';
+        const sub = [a.profile, b.reason].filter(Boolean).map(esc).join(' · ');
+        tb.appendChild(row(adCell(a.thumb, esc(a.ad_name) + pill, sub), a, ''));
       });
     });
     tb.appendChild(row('Итого по кампании', c, 'total'));
@@ -296,15 +331,20 @@ function render(d) {
   });
 }
 
-function card(k, v, s) {
-  return '<div class="card"><div class="k">' + esc(k) + '</div>' +
+function card(k, v, s, cls) {
+  return '<div class="card' + (cls ? ' ' + cls : '') + '"><div class="k">' + esc(k) + '</div>' +
     '<div class="v">' + v + '</div><div class="s">' + esc(s) + '</div></div>';
 }
+
+// есть ли у бэкенда сравнение недель — решает render по первому ответу
+let withBurn = false;
+const freqFmt = f => f ? f.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '—';
 
 /** Строка таблицы: первая ячейка — вёрстка, дальше цифры за сегодня и за неделю. */
 function row(label, x, cls) {
   const tr = document.createElement('tr');
   if (cls) tr.className = cls;
+  const cost = ratio(x.week.spend, x.week.messages);
   const cells = [
     money(x.today.spend),
     fmtInt(x.today.impressions),
@@ -313,10 +353,20 @@ function row(label, x, cls) {
     money(x.week.spend),
     fmtInt(x.week.link_clicks),
     fmtInt(x.week.messages),
-    money(ratio(x.week.spend, x.week.messages))
+    money(cost)
   ];
+  let costCls = '';
+  if (withBurn) {
+    const prevCost = x.prev ? ratio(x.prev.spend, x.prev.messages) : null;
+    // подорожание заметнее, если цифра неделю назад стоит рядом и краснеет
+    if (cost && prevCost && cost / prevCost - 1 >= 0.3) costCls = 'up';
+    cells.push(money(prevCost));
+    // частота есть только у объявления: у группы и кампании охваты не складываются
+    cells.push(freqFmt(x.week.frequency));
+  }
   tr.innerHTML = '<td class="name">' + label + '</td>' +
-    cells.map(c => '<td class="' + (c === '—' || c === '0' ? 'zero' : '') + '">' + c + '</td>').join('');
+    cells.map((c, i) => '<td class="' +
+      (c === '—' || c === '0' ? 'zero' : i === 7 ? costCls : '') + '">' + c + '</td>').join('');
   return tr;
 }
 
