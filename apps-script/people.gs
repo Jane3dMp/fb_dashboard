@@ -1906,7 +1906,11 @@ function pplBuildDaily(params) {
   const since = params.since || until.slice(0, 8) + '01';   // по умолчанию с начала месяца
 
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'daily_' + since + '_' + until;
+  // Номер в ключе — версия формата ответа. Кэш общий для всех версий
+  // развёртывания, и без номера новая версия ещё 10 минут отдавала бы
+  // ответ старой, без новых полей: страница выглядит «ничего не поменялось».
+  // Меняется формат — меняется и номер (так же у active_now2).
+  const cacheKey = 'daily2_' + since + '_' + until;
   if (params.nocache !== '1') {
     const hit = cache.get(cacheKey);
     if (hit) return JSON.parse(hit);
@@ -2164,7 +2168,7 @@ function pplBuildActive(params) {
   params = params || {};
   const cache = CacheService.getScriptCache();
   if (params.nocache !== '1') {
-    const hit = cache.get('active_now');
+    const hit = cache.get('active_now2');
     if (hit) return JSON.parse(hit);
   }
 
@@ -2342,7 +2346,7 @@ function pplBuildActive(params) {
 
   try {
     const json = JSON.stringify(out);
-    if (!partial && json.length < 100000) cache.put('active_now', json, 300);
+    if (!partial && json.length < 100000) cache.put('active_now2', json, 300);
   } catch (e) {}
   return out;
 }
