@@ -2915,7 +2915,7 @@ function pplBackfillStep_(fresh) {
   // продолжение — сразу: оборвёт лимит времени, триггер уже стоит
   ScriptApp.newTrigger('pplBackfillDirectNext').timeBased().after(7 * 60000).create();
 
-  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('SP_API_KEY') }, muteHttpExceptions: true };
+  const auth = pplSpAuth_();
   const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
   const seen = pplBackfillSeen_(sh);
   const since = Date.parse(PPL_BACKFILL_SINCE);
@@ -2948,6 +2948,20 @@ function pplBackfillStep_(fresh) {
   Logger.log('Досыпка Direct: запуск ' + job.runs + ', бот ' + Math.min(job.bot + 1, PPL_SP_BOTS.length) +
     ' из ' + PPL_SP_BOTS.length + (job.done ? ' — готово' : ', продолжение через 7 минут') +
     ', строк дописано всего ' + job.rows + ', ' + Math.round((Date.now() - t0) / 1000) + ' с');
+}
+
+/**
+ * Авторизация SendPulse — постоянный ключ с вкладки «Ключи API»
+ * (sp_apikey_…). Ищем в SP_API_KEY; 27.09.2026 ключ вписали в свойство
+ * SP_CLIENT_SECRET — берём и оттуда, если значение похоже на ключ.
+ */
+function pplSpAuth_() {
+  const p = PropertiesService.getScriptProperties();
+  const key = [p.getProperty('SP_API_KEY'), p.getProperty('SP_CLIENT_SECRET')]
+    .map(function (v) { return String(v || '').trim(); })
+    .filter(function (v) { return /^sp_apikey_/.test(v); })[0];
+  if (!key) throw new Error('Нет ключа SendPulse: свойство SP_API_KEY = sp_apikey_… (SendPulse → «Доступ к API» → «Ключи API»)');
+  return { headers: { Authorization: 'Bearer ' + key }, muteHttpExceptions: true };
 }
 
 /** Снять триггеры продолжения досыпки. */
