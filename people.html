@@ -393,10 +393,22 @@ const fmtMoney = adMoney;
 function displayName(p) {
   if (!p.name) return '—';
   if (showNames) return p.name;
-  // инициалы — только у слов с буквы: «•», эмодзи и знаки зодиака из
-  // имени профиля Instagram иначе превращаются в строку точек
-  const parts = p.name.trim().split(/\s+/).filter(w => /^\p{L}/u.test(w));
-  return parts.length ? parts.map(w => w[0].toUpperCase() + '·').join(' ') : '·';
+  // инициалы — по первой букве слова: «•», эмодзи и знаки зодиака из имени
+  // профиля Instagram («♉Жанна») иначе превращаются в строку точек;
+  // [...w] — по символам, чтобы не резать «𝐌𝐚𝐲𝐚» посреди суррогатной пары
+  const parts = p.name.trim().split(/\s+/).map(w => w.replace(/^[^\p{L}]+/u, '')).filter(Boolean);
+  return parts.length ? parts.map(w => [...w][0].toUpperCase() + '·').join(' ') : '·';
+}
+
+/**
+ * Имя профиля Instagram часто с «визиткой»: «Юлия Б. ● МАРКЕТИНГ ● SMM»
+ * или «Наталья З. | Для девушек | …» — растягивает таблицу за экран. Берём
+ * до первого разделителя и не длиннее 32 знаков; полное — в подсказке.
+ */
+function shortName(s) {
+  const full = String(s || '').trim();
+  const head = full.split(/\s*[●•|—–]\s*/)[0].trim() || full;
+  return head.length > 32 ? head.slice(0, 31) + '…' : head;
 }
 
 /**
@@ -697,7 +709,7 @@ function renderDirect(r) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${new Date(p.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
-      <td>${esc(displayName(p))}</td>
+      <td${showNames && p.name ? ` title="${esc(p.name)}"` : ''}>${esc(displayName({ name: shortName(p.name) }))}</td>
       <td>${esc(shortAccount(p.account))}</td>
       <td class="msg">${p.text ? esc(p.text) : '<span class="muted">без текста — фото, видео или отметка в сторис</span>'}</td>
       <td class="stage"><span class="pill ${cls}">${label}</span>${detail ? ' ' + esc(detail) : ''}${sub ? `<small>${sub}</small>` : ''}</td>
