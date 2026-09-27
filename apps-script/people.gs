@@ -103,7 +103,6 @@ function buildPeople(params) {
   const spendByAd = pplFetchAdSpend_(since, until);
 
   const people = pplJoinClicksToLeads_(clicks, leads);
-  const ads = pplAggregateByAd_(people, spendByAd);
 
   const byPlatform = pplFetchSpendByPlatform_(since, until);
   const amoCurrency = pplFetchAmoCurrency_();
@@ -112,6 +111,14 @@ function buildPeople(params) {
   // amo, страница выйдет без неё, а не упадёт
   let direct = [];
   try { direct = pplDirectRows_(since, until); } catch (e) { Logger.log('Кто написал в Direct: ' + e); }
+  const revenue = pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency, pipelineNames, direct);
+
+  // таблица «По объявлениям» и расход по курсам — из людей Direct, у
+  // которых ядро уже посчитало сделки и деньги
+  const toAmo = pplToAmo_(byPlatform, amoCurrency);
+  const adStats = pplDirectAdStats_(revenue.direct.rows, spendByAd);
+  const ads = pplAggregateByAd_(people, spendByAd, adStats, toAmo);
+  revenue.by_course = pplCourseSpend_(revenue.by_course, spendByAd, adStats.courseOf, toAmo);
 
   const out = {
     view: 'people',
@@ -121,9 +128,13 @@ function buildPeople(params) {
     matching: pplMatchingMode_(),
     people: people,
     ads: ads,
+    ads_total: pplAdsTotal_(ads, adStats, toAmo),
+    // откуда колонки «Написали…Выручка»: meta — клики, ad — ID объявления
+    // от SendPulse, course — по курсу
+    ads_attribution: people.length ? 'meta' : adStats.mode,
     channel: pplChannelSummary_(leads, byPlatform, until, amoCurrency, pipelineNames),
     profiles: pplFetchSpendByProfile_(spendByAd),
-    revenue: pplRevenueFromAlfa_(since, until, byPlatform, amoCurrency, pipelineNames, direct)
+    revenue: revenue
   };
 
   // 100 КБ — потолок значения в CacheService. Список людей может его
@@ -1232,7 +1243,7 @@ function pplAlfaRevenueCore_(leads, customers, pays, since, until, direct) {
   const directOut = (direct || []).map(function (r) {
     const out = {
       ts: r.ts, account: r.account, name: r.name, course: r.course, text: r.text,
-      lead_id: r.lead_id, pipeline: r.pipeline, stage: r.stage, outcome: r.outcome,
+      ad_id: r.ad_id || '', lead_id: r.lead_id, pipeline: r.pipeline, stage: r.stage, outcome: r.outcome,
       reason: r.reason, client: r.client, with_alfa: false, revenue: 0
     };
     const l = leadById[String(r.lead_id || '')];
@@ -2204,7 +2215,7 @@ function pplJoinClicksToLeads_(clicks, leads) {
 }
 
 /** Сводка по объявлениям: сколько стоило и что принесло. */
-function pplAggregateByAd_(people, spendByAd) {
+function pplAggregateByAd_(people, spendByAd, direct, toAmo) {
   const acc = {};
   people.forEach(function (p) {
     if (!acc[p.ad_id]) acc[p.ad_id] = { ad_id: p.ad_id, wrote: 0, deals: 0, won: 0, revenue: 0 };
@@ -2220,21 +2231,33 @@ function pplAggregateByAd_(people, spendByAd) {
     if (!acc[adId]) acc[adId] = { ad_id: adId, wrote: 0, deals: 0, won: 0, revenue: 0 };
   });
 
+  // пока кликов Meta нет (App Review), колонки заполняют люди из Direct
+  // (pplDirectAdStats_); клики, когда появятся, точнее — они и победят
+  const stats = (direct && direct.byAd) || {};
+  const courseOf = (direct && direct.courseOf) || {};
+  const conv = toAmo || pplSameCurrency_;
   return Object.keys(acc).map(function (adId) {
     const a = acc[adId];
+    const d = !a.wrote && stats[adId] ? stats[adId] : null;
+    const m = d || a;
     const s = spendByAd[adId] || { ad_name: '', campaign_name: '', spend: 0, clicks: 0, impressions: 0 };
+    // выручка — в валюте Альфы, расход — в валюте Meta: CAC и ROAS считаем
+    // после перевода, иначе делили бы рубли на доллары
+    const spendAmo = s.spend ? conv(s.spend) : null;
     return {
       ad_id: adId,
       ad_name: s.ad_name,
       campaign_name: s.campaign_name,
       spend: s.spend,
       clicks: s.clicks,
-      wrote: a.wrote,
-      deals: a.deals,
-      won: a.won,
-      revenue: a.revenue,
-      cac: a.won ? s.spend / a.won : null,
-      roas: s.spend ? a.revenue / s.spend : null
+      wrote: m.wrote,
+      deals: m.deals,
+      won: m.won,
+      revenue: m.revenue,
+      course: courseOf[adId] || '',
+      attr: d ? d.attr : (a.wrote ? 'meta' : ''),
+      cac: spendAmo !== null && m.won ? spendAmo / m.won : null,
+      roas: spendAmo ? m.revenue / spendAmo : null
     };
   }).sort(function (x, y) { return y.spend - x.spend; });
 }
@@ -2579,6 +2602,7 @@ function pplDirectRow_(r, lead, stages) {
     name: String(r.name || r.username || '').normalize('NFC').trim(),
     course: String(r.course || ''),
     text: String(r.text || '').normalize('NFC').slice(0, PPL_DIRECT_TEXT_MAX),
+    ad_id: String(r.ad_id || ''),
     lead_id: lead ? lead.id : '',
     pipeline: '', stage: '', reason: '', client: false,
     // сделки нет: пока статус пустой или retry, задача её ещё ищет
@@ -2607,6 +2631,192 @@ function pplShortBot_(name) {
   if (/детск/i.test(s)) return 'Детский клуб';
   if (/прознан|каникул|уикенд|weekend/i.test(s)) return 'Прознание';
   return s.replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().slice(0, 24);
+}
+
+/*
+ * Люди из Direct по объявлениям и расход по курсам — для таблицы «По
+ * объявлениям» и разреза «Курс из первого сообщения». Курс объявления
+ * определяем тем же словарём, что и курс сообщения. Словарь — КОПИЯ
+ * SP_COURSES / SP_COMBOS из webhook.gs: это другой проект Apps Script,
+ * общего кода нет. Тест сверяет копии; новый курс — в оба файла.
+ */
+const PPL_COURSES = [
+  ['Minecraft', /minecraft|майнкрафт/i],
+  ['Roblox', /roblox|роблокс/i],
+  ['Scratch', /scratch|скр[еэ]тч/i],
+  ['Python', /python|пайтон|питон/i],
+  ['3D Blender', /blender|блендер/i],
+  ['Unity', /(?<![a-z])unity|юнити/i],   // не «community»
+  ['Godot', /godot|годот/i],
+  ['Digital Art', /digital[\s-]*art|диджитал|цифров\S*\s+(рисован|графи|арт|живопис)/i],
+  ['TinkerCad', /tinkercad|тинкеркад/i],
+  ['App Inventor', /app\s*inventor|апп?\s*инвентор/i],
+  ['Старт в IT', /старт\s+в\s+(it|айти)/i],
+  ['Робототехника', /робототехн|wedo|лего|lego/i],
+  ['Электроника', /электроник/i],
+  ['Английский', /англ/i],
+  ['Каллиграфия', /каллиграф/i],
+  ['Глина', /глин|лепк/i],
+  ['Полимерка', /полимер/i],
+  ['Песок', /пес(ок|к|оч)/i],
+  ['Арт-студия', /арт[\s-]*студи/i],
+  ['Рисование', /рисова|рисунк/i],
+  ['Почемучка', /почемучк/i],
+  ['Говорилка', /говорилк/i],
+  ['Живая Азбука', /азбук/i],
+  ['Нейромалыш', /нейромалыш/i],
+  ['Нейродиагностика', /нейродиагност|диагностик/i],
+  ['Нейро', /нейро/i],
+  ['Логика', /логик/i],
+  ['Математика', /математик/i],
+  ['Финансовая грамотность', /финанс|финграм/i],
+  ['Взросление', /взрослени/i],
+  ['7 навыков', /(7|семь)\s*навык/i],
+  ['Каникулы', /каникул|лагер/i],
+  ['Интенсив', /интенсив/i]
+];
+
+const PPL_COMBOS = [
+  [['Roblox', '3D Blender'], 'Roblox + 3D Blender'],
+  [['3D Blender', 'Unity'], '3D Blender + Unity']
+];
+
+/** Курс по тексту — точь-в-точь spCourse_ из webhook.gs. Чистая функция. */
+function pplCourseOf_(text) {
+  const s = String(text || '');
+  if (!s) return '';
+  const found = [];
+  PPL_COURSES.forEach(function (c, order) {
+    const m = c[1].exec(s);
+    if (m) found.push({ name: c[0], at: m.index, order: order });
+  });
+  if (!found.length) return '';
+  const names = found.map(function (f) { return f.name; });
+  for (let i = 0; i < PPL_COMBOS.length; i++) {
+    const parts = PPL_COMBOS[i][0];
+    if (parts.every(function (p) { return names.indexOf(p) !== -1; })) return PPL_COMBOS[i][1];
+  }
+  found.sort(function (a, b) { return a.at - b.at || a.order - b.order; });
+  return found[0].name;
+}
+
+/**
+ * Кто из Direct пришёл с какого объявления. Точно — по ID объявления, если
+ * SendPulse его передал (referral). Раз передал хоть однажды за период,
+ * строки без ID — не из рекламы, и по курсу их не раскладываем. Иначе — по
+ * курсу: курс объявления берём из названия кампании (там тема: «природная
+ * глина сообщение»), не нашёлся — из названия объявления; курс человека —
+ * из первого сообщения. Одно объявление на курс — цифры его; несколько —
+ * у каждого общая цифра курса (attr 'shared'), в итог она входит один раз.
+ * Сделка — только новая (не «уже был в amoCRM»), деньги — как в ядре.
+ * Чистая функция: rows — revenue.direct.rows, spendByAd — pplFetchAdSpend_.
+ */
+function pplDirectAdStats_(rows, spendByAd) {
+  const ads = spendByAd || {};
+  const courseOf = {};
+  const adsOf = {};
+  Object.keys(ads).forEach(function (id) {
+    const c = pplCourseOf_(ads[id].campaign_name) || pplCourseOf_(ads[id].ad_name);
+    courseOf[id] = c;
+    if (c) (adsOf[c] = adsOf[c] || []).push(id);
+  });
+  const list = rows || [];
+  const exact = list.some(function (r) { return r.ad_id && ads[r.ad_id]; });
+  const blank = function (attr) { return { wrote: 0, deals: 0, won: 0, revenue: 0, attr: attr }; };
+  const add = function (a, r) {
+    a.wrote++;
+    if (r.lead_id && !r.client) a.deals++;
+    if (r.revenue > 0) { a.won++; a.revenue += r.revenue; }
+  };
+  const byAd = {};
+  const groups = {};
+  const total = blank('');
+  list.forEach(function (r) {
+    let target = null;
+    if (exact) {
+      if (r.ad_id && ads[r.ad_id]) target = byAd[r.ad_id] || (byAd[r.ad_id] = blank('ad'));
+    } else {
+      const ids = r.course ? (adsOf[r.course] || []) : [];
+      if (ids.length === 1) target = byAd[ids[0]] || (byAd[ids[0]] = blank('course'));
+      else if (ids.length > 1) target = groups[r.course] || (groups[r.course] = blank('shared'));
+    }
+    if (!target) return;
+    add(target, r);
+    add(total, r);
+  });
+  Object.keys(groups).forEach(function (c) {
+    adsOf[c].forEach(function (id) { byAd[id] = Object.assign({}, groups[c]); });
+  });
+  return { byAd: byAd, courseOf: courseOf, total: total, mode: exact ? 'ad' : 'course' };
+}
+
+/**
+ * Расход по курсам к разрезу by_course: курс объявления — как в
+ * pplDirectAdStats_. Курсы, на которые тратили, а заявок нет, добавляются
+ * строками — слитый бюджет должен быть виден; расход объявлений без курса
+ * ложится в «курс не определён». CAC и ROAS — в валюте Альфы через toAmo
+ * (нечем перевести — null). Чистая функция.
+ */
+function pplCourseSpend_(byCourse, spendByAd, courseOf, toAmo) {
+  const spend = {};
+  Object.keys(spendByAd || {}).forEach(function (id) {
+    const c = (courseOf || {})[id] || PPL_NO_COURSE;
+    spend[c] = (spend[c] || 0) + Number(spendByAd[id].spend || 0);
+  });
+  const conv = toAmo || pplSameCurrency_;
+  const rows = (byCourse || []).map(function (c) { return Object.assign({}, c); });
+  Object.keys(spend).forEach(function (c) {
+    if (!rows.some(function (r) { return r.course === c; })) {
+      rows.push({ course: c, leads: 0, with_alfa: 0, paid: 0, revenue: 0 });
+    }
+  });
+  return rows.map(function (r) {
+    const s = spend[r.course] || 0;
+    const amo = s ? conv(s) : null;
+    r.spend = s;
+    r.cac = amo !== null && r.paid ? amo / r.paid : null;
+    r.roas = amo ? r.revenue / amo : null;
+    return r;
+  });
+}
+
+/**
+ * Итог таблицы объявлений. Люди из Direct — по одному разу, даже если
+ * «общая цифра курса» стоит у нескольких объявлений; клики Meta (после App
+ * Review) точны по объявлению, их просто складываем. Чистая функция.
+ */
+function pplAdsTotal_(ads, stats, toAmo) {
+  const t = { spend: 0, clicks: 0, wrote: 0, deals: 0, won: 0, revenue: 0 };
+  const meta = ads.some(function (a) { return a.attr === 'meta'; });
+  ads.forEach(function (a) {
+    t.spend += a.spend;
+    t.clicks += a.clicks;
+    if (meta) { t.wrote += a.wrote; t.deals += a.deals; t.won += a.won; t.revenue += a.revenue; }
+  });
+  if (!meta && stats && stats.total) {
+    t.wrote = stats.total.wrote; t.deals = stats.total.deals;
+    t.won = stats.total.won; t.revenue = stats.total.revenue;
+  }
+  const amo = t.spend ? (toAmo || pplSameCurrency_)(t.spend) : null;
+  t.cac = amo !== null && t.won ? amo / t.won : null;
+  t.roas = amo ? t.revenue / amo : null;
+  return t;
+}
+
+/** Перевод по умолчанию: валюта одна — как считала сводка до переводов. */
+function pplSameCurrency_(x) { return x; }
+
+/**
+ * Перевод расхода Meta в валюту Альфы — та же логика, что в
+ * pplRevenueFromAlfa_: одна валюта или курс из свойства FX_RATE. Нечем
+ * сравнить — функция отдаёт null, и CAC с ROAS не считаются, а не врут.
+ */
+function pplToAmo_(spendByPlatform, amoCurrency) {
+  const adCur = spendByPlatform.currency;
+  const rate = Number(PropertiesService.getScriptProperties().getProperty('FX_RATE') || 0);
+  const same = adCur && amoCurrency && adCur === amoCurrency;
+  if (spendByPlatform.mixed_currency || !(same || rate > 0)) return function () { return null; };
+  return function (x) { return same ? x : x * rate; };
 }
 
 /** Воронки amoCRM с этапами: { id: { name, statuses: { id: название } } }. */

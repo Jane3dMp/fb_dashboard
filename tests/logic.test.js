@@ -1195,6 +1195,107 @@ test('деньги — только у новой сделки, у действ�
   assert.strictEqual(r.direct[2].with_alfa, false);
 });
 
+console.log('\nЛюди из Direct по объявлениям и расход по курсам');
+
+const courseOf_ = sandbox.pplCourseOf_;
+const adStats_ = sandbox.pplDirectAdStats_;
+const courseSpend_ = sandbox.pplCourseSpend_;
+const adsTotal_ = sandbox.pplAdsTotal_;
+// названия как в кабинете 27.09.2026
+const adSpend = {
+  en1: { ad_name: '3-5 класс статика', campaign_name: 'сообщ английский набор 24,08', spend: 231, clicks: 655 },
+  en2: { ad_name: 'видео', campaign_name: 'английский 1-2 класс сообщение', spend: 40, clicks: 90 },
+  gl: { ad_name: 'видео', campaign_name: 'природная глина сообщение', spend: 155, clicks: 533 },
+  cal: { ad_name: 'статика', campaign_name: 'каллиграфия сообщение', spend: 116, clicks: 374 },
+  mco: { ad_name: 'видео', campaign_name: 'МЦО сообщение', spend: 113, clicks: 333 }
+};
+const dRow = (over) => Object.assign({ ad_id: '', course: '', lead_id: 1, client: false, revenue: 0 }, over);
+
+test('курс объявления — по названию кампании, как курс сообщения', () => {
+  assert.strictEqual(courseOf_('сообщ английский набор 24,08'), 'Английский');
+  assert.strictEqual(courseOf_('природная глина сообщение'), 'Глина');
+  assert.strictEqual(courseOf_('каллиграфия сообщение'), 'Каллиграфия');
+  assert.strictEqual(courseOf_('МЦО сообщение'), '', 'нет в словаре — курс не определён');
+  assert.strictEqual(courseOf_('Roblox и Blender: сколько?'), 'Roblox + 3D Blender', 'сочетания — как в приёмнике');
+});
+
+test('по курсу: одно объявление — цифры его, несколько — общая цифра курса', () => {
+  const s = adStats_([
+    dRow({ course: 'Английский', revenue: 300 }),
+    dRow({ course: 'Глина', client: true }),
+    dRow({ course: 'Глина', lead_id: '' }),
+    dRow({ course: '' }),
+    dRow({ course: 'Python' })
+  ], adSpend);
+  assert.strictEqual(s.mode, 'course');
+  assert.strictEqual(s.byAd.gl.attr, 'course');
+  assert.strictEqual(s.byAd.gl.wrote, 2);
+  assert.strictEqual(s.byAd.gl.deals, 0, 'старая сделка и «ищем сделку» — не новые сделки');
+  assert.strictEqual(s.byAd.en1.attr, 'shared');
+  assert.strictEqual(s.byAd.en2.wrote, 1);
+  assert.strictEqual(s.byAd.en1.revenue, 300);
+  assert.strictEqual(s.byAd.cal, undefined);
+  assert.strictEqual(s.courseOf.mco, '');
+  assert.strictEqual(JSON.stringify(s.total), JSON.stringify({ wrote: 3, deals: 1, won: 1, revenue: 300, attr: '' }),
+    'в итоге англичанин один раз, хоть у двух объявлений');
+});
+
+test('SendPulse передал ID объявления — считаем точно, по курсу не раскладываем', () => {
+  const s = adStats_([
+    dRow({ ad_id: 'gl', course: 'Глина', revenue: 90 }),
+    dRow({ course: 'Английский' })
+  ], adSpend);
+  assert.strictEqual(s.mode, 'ad');
+  assert.strictEqual(s.byAd.gl.attr, 'ad');
+  assert.strictEqual(s.byAd.gl.revenue, 90);
+  assert.strictEqual(s.byAd.en1, undefined, 'курс без ID — не реклама');
+  assert.strictEqual(s.total.wrote, 1);
+});
+
+test('таблица объявлений: люди из Direct, CAC и ROAS — в валюте Альфы', () => {
+  const s = adStats_([dRow({ course: 'Глина', revenue: 330 })], adSpend);
+  const ads = aggregateByAd_([], adSpend, s, x => x * 3.3);
+  const gl = ads.find(a => a.ad_id === 'gl');
+  assert.strictEqual(gl.wrote, 1);
+  assert.strictEqual(gl.won, 1);
+  assert.strictEqual(gl.course, 'Глина');
+  assert.strictEqual(gl.attr, 'course');
+  assert.ok(Math.abs(gl.cac - 155 * 3.3) < 1e-9);
+  assert.ok(Math.abs(gl.roas - 330 / (155 * 3.3)) < 1e-9);
+  const mco = ads.find(a => a.ad_id === 'mco');
+  assert.strictEqual(mco.wrote, 0);
+  assert.strictEqual(mco.attr, '');
+  const noFx = aggregateByAd_([], adSpend, s, () => null);
+  assert.strictEqual(noFx.find(a => a.ad_id === 'gl').roas, null, 'нечем перевести валюту — не врём');
+});
+
+test('итог таблицы: общая цифра курса входит один раз', () => {
+  const s = adStats_([dRow({ course: 'Английский', revenue: 300 })], adSpend);
+  const ads = aggregateByAd_([], adSpend, s, x => x);
+  const t = adsTotal_(ads, s, x => x);
+  assert.strictEqual(t.wrote, 1);
+  assert.strictEqual(t.revenue, 300);
+  assert.strictEqual(t.spend, 231 + 40 + 155 + 116 + 113);
+  assert.ok(Math.abs(t.roas - 300 / 655) < 1e-9);
+});
+
+test('расход по курсам: слитый бюджет виден, объявления без курса — в «не определён»', () => {
+  const s = adStats_([], adSpend);
+  const rows = courseSpend_(
+    [{ course: 'Глина', leads: 2, with_alfa: 1, paid: 1, revenue: 330 },
+      { course: '(курс не определён)', leads: 5, with_alfa: 0, paid: 0, revenue: 0 }],
+    adSpend, s.courseOf, x => x * 3.3
+  );
+  const by = c => rows.find(r => r.course === c);
+  assert.strictEqual(by('Глина').spend, 155);
+  assert.ok(Math.abs(by('Глина').roas - 330 / (155 * 3.3)) < 1e-9);
+  assert.strictEqual(by('Английский').spend, 271, 'оба объявления английского');
+  assert.strictEqual(by('Английский').leads, 0);
+  assert.strictEqual(by('Английский').cac, null);
+  assert.strictEqual(by('Каллиграфия').spend, 116);
+  assert.strictEqual(by('(курс не определён)').spend, 113, 'МЦО');
+});
+
 test('без строк Direct ядро отдаёт пустой список, остальное не меняется', () => {
   const r = revenueCore_([igLead({})], [], [], '2026-07-01', '2026-07-31');
   assert.strictEqual(r.direct.length, 0);
@@ -1440,6 +1541,14 @@ test('текст сообщения SendPulse: из channel_data, иначе las
   assert.strictEqual(spText_({ info: { message: { channel_data: { message: { text: 'Minecraft: цена?' } } } } }), 'Minecraft: цена?');
   assert.strictEqual(spText_({ contact: { last_message: 'Глина: пробное?' } }), 'Глина: пробное?');
   assert.strictEqual(spText_({}), '');
+});
+
+test('словарь курсов в «ФБ» — точная копия словаря приёмника', () => {
+  // people.gs и webhook.gs — разные проекты Apps Script, общего кода нет
+  const dump = 'JSON.stringify([%C.map(c => [c[0], c[1].source, c[1].flags]), %K])';
+  const ppl = vm.runInContext(dump.replace('%C', 'PPL_COURSES').replace('%K', 'PPL_COMBOS'), sandbox);
+  const hook = vm.runInContext(dump.replace('%C', 'SP_COURSES').replace('%K', 'SP_COMBOS'), hookBox);
+  assert.strictEqual(ppl, hook, 'курс добавили в один файл, а в другой — нет');
 });
 
 test('один человек — одна строка за неделю, но строка с курсом важнее', () => {

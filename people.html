@@ -227,8 +227,8 @@
       <div class="table-scroll">
         <table>
           <thead><tr>
-            <th>Курс</th><th>Заявок</th><th>Связаны с Альфой</th>
-            <th>Заплатили</th><th>Выручка</th>
+            <th>Курс</th><th>Расход</th><th>Заявок</th><th>Связаны с Альфой</th>
+            <th>Заплатили</th><th>Выручка</th><th>CAC</th><th>ROAS</th>
           </tr></thead>
           <tbody id="coursesBody"></tbody>
         </table>
@@ -460,28 +460,42 @@ function render() {
 
   const adsBody = document.getElementById('adsBody');
   adsBody.innerHTML = '';
+  // откуда цифры «Написали…Выручка» у объявления (см. pplDirectAdStats_)
+  const ATTR_LABEL = {
+    course: c => `по курсу «${esc(c)}»`,
+    shared: c => `≈ общая цифра курса «${esc(c)}»`
+  };
   d.ads.forEach(a => {
+    const sub = [a.campaign_name ? esc(a.campaign_name) : '', ATTR_LABEL[a.attr] ? ATTR_LABEL[a.attr](a.course) : '']
+      .filter(Boolean).join(' · ');
     const tr = document.createElement('tr');
+    // выручка, CAC — из Альфы и amoCRM, в их валюте; расход — в валюте Meta
     tr.innerHTML = `
-      <td>${a.ad_name || a.ad_id}${a.campaign_name ? '<small>' + a.campaign_name + '</small>' : ''}</td>
+      <td>${esc(a.ad_name || a.ad_id)}${sub ? '<small>' + sub + '</small>' : ''}</td>
       <td>${fmtMoney(a.spend)}</td>
       <td>${fmtInt(a.clicks)}</td>
       <td class="${a.wrote ? '' : 'zero'}">${fmtInt(a.wrote)}</td>
       <td class="${a.deals ? '' : 'zero'}">${fmtInt(a.deals)}</td>
       <td class="${a.won ? '' : 'zero'}">${fmtInt(a.won)}</td>
-      <td class="${a.revenue ? '' : 'zero'}">${fmtMoney(a.revenue)}</td>
-      <td>${a.cac === null ? '—' : fmtMoney(a.cac)}</td>
-      <td>${a.roas === null ? '—' : a.roas.toFixed(2) + '×'}</td>`;
+      <td class="${a.revenue ? '' : 'zero'}">${amoMoney(a.revenue)}</td>
+      <td>${a.cac == null ? '—' : amoMoney(a.cac)}</td>
+      <td>${a.roas == null ? '—' : a.roas.toFixed(2) + '×'}</td>`;
     adsBody.appendChild(tr);
+  });
+  // итог от сервера: «общая цифра курса» у нескольких объявлений входит в
+  // него один раз; старый бэкенд итога не шлёт — складываем сами
+  const at = d.ads_total || Object.assign({}, t, {
+    cac: t.won ? t.spend / t.won : null,
+    roas: t.spend ? t.revenue / t.spend : null
   });
   const total = document.createElement('tr');
   total.className = 'total';
   total.innerHTML = `
-    <td>Итого</td><td>${fmtMoney(t.spend)}</td><td>${fmtInt(t.clicks)}</td>
-    <td>${fmtInt(t.wrote)}</td><td>${fmtInt(t.deals)}</td><td>${fmtInt(t.won)}</td>
-    <td>${fmtMoney(t.revenue)}</td>
-    <td>${t.won ? fmtMoney(t.spend / t.won) : '—'}</td>
-    <td>${t.spend ? (t.revenue / t.spend).toFixed(2) + '×' : '—'}</td>`;
+    <td>Итого</td><td>${fmtMoney(at.spend)}</td><td>${fmtInt(at.clicks)}</td>
+    <td>${fmtInt(at.wrote)}</td><td>${fmtInt(at.deals)}</td><td>${fmtInt(at.won)}</td>
+    <td>${amoMoney(at.revenue)}</td>
+    <td>${at.cac == null ? '—' : amoMoney(at.cac)}</td>
+    <td>${at.roas == null ? '—' : at.roas.toFixed(2) + '×'}</td>`;
   adsBody.appendChild(total);
 
   // Пока Meta не одобрила приложение, кликов нет вообще — пустая таблица
@@ -661,19 +675,26 @@ function renderCourses(r) {
     total += c.leads;
     if (c.course !== '(курс не определён)') known += c.leads;
     const tr = document.createElement('tr');
+    // расход, CAC и ROAS есть только у бэкенда с разрезом расхода по курсам
     tr.innerHTML = `
-      <td>${c.course}</td>
-      <td>${fmtInt(c.leads)}</td>
+      <td>${esc(c.course)}</td>
+      <td class="${c.spend ? '' : 'zero'}">${c.spend ? fmtMoney(c.spend) : '—'}</td>
+      <td class="${c.leads ? '' : 'zero'}">${fmtInt(c.leads)}</td>
       <td class="${c.with_alfa ? '' : 'zero'}">${fmtInt(c.with_alfa)}</td>
       <td class="${c.paid ? '' : 'zero'}">${fmtInt(c.paid)}</td>
-      <td class="${c.revenue ? '' : 'zero'}">${c.revenue ? amoMoney(c.revenue) : '—'}</td>`;
+      <td class="${c.revenue ? '' : 'zero'}">${c.revenue ? amoMoney(c.revenue) : '—'}</td>
+      <td>${c.cac == null ? '—' : amoMoney(c.cac)}</td>
+      <td>${c.roas == null ? '—' : c.roas.toFixed(2) + '×'}</td>`;
     body.appendChild(tr);
   });
   document.getElementById('coursesNote').innerHTML =
     `Курс определён у <b>${fmtInt(known)}</b> из ${fmtInt(total)} заявок из Instagram.
      Он берётся из первого сообщения человека — в рекламе это текст нажатой
      кнопки («Лепка из природной глины: …»). «Курс не определён» — человек
-     написал своими словами без названия курса; такие заявки размечает менеджер.`;
+     написал своими словами без названия курса; такие заявки размечает менеджер.
+     Расход — по объявлениям, в названии кампании которых есть этот курс
+     («природная глина сообщение» → Глина); расход объявлений без курса в
+     названии — в строке «Курс не определён». CAC и ROAS — в валюте Альфы.`;
 }
 
 /**
@@ -818,6 +839,29 @@ function renderChannelNote(c) {
  */
 function renderMatchNote(d) {
   const box = document.getElementById('matchNote');
+
+  if (!d.people.length && d.ads_attribution === 'ad') {
+    box.innerHTML = `<div class="note">
+      «Написали», «Сделки», «Оплатили» и «Выручка» — по людям из Direct, точно по
+      объявлению: ID объявления передал SendPulse. «Сделки» — только новые сделки,
+      выручка — оплаты в Альфе с даты заявки; тех, кто уже был в amoCRM, этой
+      рекламе не приписываем.
+    </div>`;
+    return;
+  }
+  if (!d.people.length && d.ads_attribution === 'course') {
+    box.innerHTML = `<div class="note">
+      «Написали», «Сделки», «Оплатили» и «Выручка» — по людям из Direct, по курсу:
+      ID объявления SendPulse пока не передаёт, поэтому курс объявления берётся из
+      названия кампании («природная глина сообщение» → Глина), а курс человека — из
+      первого сообщения. Если на курс одно объявление, цифры его; если несколько —
+      у каждого общая цифра курса (≈), в «Итого» она входит один раз. Объявления,
+      в названии которых курса нет (например, «МЦО»), остаются пустыми. Небольшой
+      перебор: в «Написали» попадают и те, кто назвал курс сам, без рекламы.
+      «Сделки» — только новые сделки, выручка — оплаты в Альфе с даты заявки.
+    </div>`;
+    return;
+  }
 
   if (!d.people.length) {
     box.innerHTML = `<div class="note">
