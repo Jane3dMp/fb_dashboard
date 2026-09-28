@@ -1409,14 +1409,34 @@ test('план: сделку забирает последнее обращен�
   assert.strictEqual(taken.length, 0, 'сделка уже своя у другой строки — не отбираем');
 });
 
-test('в перепривязанную сделку курс пишется, как в свежую', () => {
+const fieldOf = (patch, id) => (patch.custom_fields_values || []).find(f => f.field_id === id);
+
+test('в перепривязанную сделку курс пишется, как в свежую, и источник Instagram', () => {
   const p = directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, NEW_LEAD, true);
   assert.strictEqual(p.status, 'ok');
   assert.strictEqual(p.patch.id, NEW_LEAD.id);
-  assert.strictEqual(p.patch.custom_fields_values[0].values[0].value, 'Математика');
+  assert.strictEqual(fieldOf(p.patch, 1648719).values[0].value, 'Математика');
+  // 28.09: менеджер завёл сделку руками, источник пустой — сделка выпадала
+  // из канала Instagram и из разреза по курсам
+  assert.strictEqual(fieldOf(p.patch, 1654275).values[0].enum_id, 4702307);
   assert.strictEqual(JSON.stringify(p.patch.tags_to_add), JSON.stringify([{ name: 'курс: Математика' }]));
   // без флага та же сделка — «старая»: заведена через 14 часов, вне окна
-  assert.strictEqual(directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, NEW_LEAD).status, 'old_lead');
+  const old = directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, NEW_LEAD);
+  assert.strictEqual(old.status, 'old_lead');
+  assert.strictEqual(old.patch.custom_fields_values, undefined, 'в старую сделку ни поля, ни источника');
+});
+
+test('перепривязка без курса: только источник; поставленный менеджером не трогаем', () => {
+  const bare = directPatch_({ ts: MATH_TS, course: '', ad_id: '' }, NEW_LEAD, true);
+  assert.strictEqual(bare.patch.custom_fields_values.length, 1);
+  assert.strictEqual(fieldOf(bare.patch, 1654275).values[0].enum_id, 4702307);
+  assert.strictEqual(bare.patch.tags_to_add, undefined);
+  const called = Object.assign({}, NEW_LEAD, {
+    custom_fields_values: [{ field_id: 1654275, values: [{ value: 'Звонок', enum_id: 4702311 }] }]
+  });
+  assert.strictEqual(directPatch_({ ts: MATH_TS, course: '', ad_id: '' }, called, true).patch, null);
+  const calledCourse = directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, called, true);
+  assert.strictEqual(fieldOf(calledCourse.patch, 1654275), undefined, '«Звонок» остаётся');
 });
 
 test('перепривязанная строка — новая заявка, а не «уже был в amoCRM», и видна без курса', () => {

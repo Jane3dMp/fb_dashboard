@@ -1303,6 +1303,14 @@ const PPL_AMO_ALFA_FIELD = 1652617;
 const PPL_AMO_UTM_CAMPAIGN_FIELD = 1648719;
 /** Поле сделки utm_content: сюда pplTagDirectCourses пишет ID объявления. */
 const PPL_AMO_UTM_CONTENT_FIELD = 1648715;
+/**
+ * Поле сделки «Источник заявки» (список) и его вариант «Instagram»
+ * (сверено по API 28.09.2026). У сделок из чата его ставит робот amoCRM,
+ * а у заведённых вручную оно пустое, и такие сделки не попадали ни в
+ * канал Instagram, ни в разрез по курсам. Перепривязка его дописывает.
+ */
+const PPL_AMO_SOURCE_FIELD = 1654275;
+const PPL_AMO_SOURCE_INSTAGRAM = 4702307;
 /** Строка разреза для заявок, у которых курс из переписки не определён. */
 const PPL_NO_COURSE = '(курс не определён)';
 
@@ -2933,16 +2941,26 @@ function pplPickChatEventLead_(tsIso, events) {
  * курс приписал бы ей чужую выручку. Заполненное не трогаем. Тег «курс: …»
  * ставится в любую найденную сделку — менеджеру видно, о чём спросили.
  * asNew — сделку менеджер завёл на эту переписку позже, вручную
- * (перепривязка, pplRelinkOldLeads_): она новая, хоть и вне окна.
+ * (перепривязка, pplRelinkOldLeads_): она новая, хоть и вне окна, и если
+ * источник заявки в ней не поставлен — ставим Instagram: обращение пришло
+ * из Direct. Поставленный менеджером («Звонок») не трогаем.
  * Чистая функция: { patch: объект для PATCH или null, status }.
  */
 function pplDirectPatch_(msg, lead, asNew) {
   const t = new Date(msg.ts).getTime();
   const created = Number(lead.created_at || 0) * 1000;
   const fresh = !!asNew || (created >= t - PPL_DIRECT_BEFORE_MS && created <= t + PPL_DIRECT_AFTER_MS);
-  // без курса и рекламы писать нечего — запоминаем только, новая ли переписка
-  if (!msg.course && !msg.ad_id) return { patch: null, status: fresh ? 'no_course' : 'old_lead' };
   const fields = [];
+  if (asNew && !pplLeadFieldValue_(lead, PPL_AMO_SOURCE_FIELD)) {
+    fields.push({ field_id: PPL_AMO_SOURCE_FIELD, values: [{ enum_id: PPL_AMO_SOURCE_INSTAGRAM }] });
+  }
+  // без курса и рекламы писать больше нечего — запоминаем только, новая ли переписка
+  if (!msg.course && !msg.ad_id) {
+    return {
+      patch: fields.length ? { id: lead.id, custom_fields_values: fields } : null,
+      status: fresh ? 'no_course' : 'old_lead'
+    };
+  }
   if (fresh && msg.course && !pplLeadFieldValue_(lead, PPL_AMO_UTM_CAMPAIGN_FIELD)) {
     fields.push({ field_id: PPL_AMO_UTM_CAMPAIGN_FIELD, values: [{ value: msg.course }] });
   }
@@ -3054,15 +3072,18 @@ function pplRelinkOldLeads_() {
   const horizon = last ? now - (PPL_RELINK_DAYS + 1) * 86400000 : 0;
   const rows = [];
   const used = {};
+  const relinked = [];
   for (let i = 1; i < values.length; i++) {
     const r = values[i];
     const st = String(r[col.status] || '');
     const leadId = Number(r[col.lead_id] || 0);
     // сделки, у которых уже есть своя строка, чужой строке не отдаём
     if (leadId && st !== 'old_lead') used[leadId] = true;
-    if (st !== 'old_lead' || !leadId) continue;
     const t = new Date(r[col.ts]).getTime();
-    if (!t || t < horizon) continue;
+    if (!leadId || !t || t < horizon) continue;
+    // перепривязанные раньше — только проверить источник (см. ниже)
+    if (st === 'relinked') { relinked.push(leadId); continue; }
+    if (st !== 'old_lead') continue;
     rows.push({
       i: i, leadId: leadId,
       msg: {
@@ -3072,10 +3093,31 @@ function pplRelinkOldLeads_() {
       }
     });
   }
-  if (!rows.length) { props.setProperty(PPL_RELINK_KEY, String(now)); return; }
+  if (!rows.length && !relinked.length) { props.setProperty(PPL_RELINK_KEY, String(now)); return; }
 
   const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
   const auth = { headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') }, muteHttpExceptions: true };
+  const patchLead = function (patch) {
+    return UrlFetchApp.fetch(base + '/leads', {
+      method: 'patch',
+      contentType: 'application/json',
+      payload: JSON.stringify([patch]),
+      headers: auth.headers,
+      muteHttpExceptions: true
+    }).getResponseCode() === 200;
+  };
+
+  // Источник у сделок, перепривязанных раньше: до 28.09 его не ставили, а
+  // менеджер, заводя сделку руками, оставляет пустым. Пустой — Instagram.
+  if (relinked.length) {
+    pplFetchLeads_(base, auth, relinked).forEach(function (l) {
+      if (pplLeadFieldValue_(l, PPL_AMO_SOURCE_FIELD)) return;
+      const ok = patchLead({ id: l.id, custom_fields_values: [
+        { field_id: PPL_AMO_SOURCE_FIELD, values: [{ enum_id: PPL_AMO_SOURCE_INSTAGRAM }] }] });
+      Logger.log('Перепривязка Direct: источник Instagram в сделку ' + l.id + (ok ? '' : ' — не записался'));
+    });
+  }
+  if (!rows.length) { props.setProperty(PPL_RELINK_KEY, String(now)); return; }
   const uniq = function (list) {
     const seen = {};
     return list.filter(function (x) { return !seen[x] && (seen[x] = true); });
@@ -3097,19 +3139,10 @@ function pplRelinkOldLeads_() {
 
   pplRelinkPlan_(rows, contactsByLead, leadsByContact, leadById, used).forEach(function (p) {
     const plan = pplDirectPatch_(p.msg, p.lead, true);
-    if (plan.patch) {
-      const resp = UrlFetchApp.fetch(base + '/leads', {
-        method: 'patch',
-        contentType: 'application/json',
-        payload: JSON.stringify([plan.patch]),
-        headers: auth.headers,
-        muteHttpExceptions: true
-      });
-      // не записалось — строку не трогаем, через час попробуем снова
-      if (resp.getResponseCode() !== 200) {
-        Logger.log('Перепривязка Direct, строка ' + (p.i + 1) + ': PATCH HTTP ' + resp.getResponseCode());
-        return;
-      }
+    // не записалось — строку не трогаем, через час попробуем снова
+    if (plan.patch && !patchLead(plan.patch)) {
+      Logger.log('Перепривязка Direct, строка ' + (p.i + 1) + ': PATCH не прошёл');
+      return;
     }
     sh.getRange(p.i + 1, col.status + 1, 1, 2).setValues([['relinked', p.lead.id]]);
     Logger.log('Перепривязка Direct, строка ' + (p.i + 1) + ': сделка ' + p.from + ' → ' + p.lead.id);
