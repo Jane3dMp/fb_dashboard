@@ -1863,6 +1863,45 @@ function pplActiveAdIds_() {
 }
 
 /**
+ * Диагностика Meta по кабинетам: ответ Insights на тот же запрос, что
+ * делают «Дни» (по объявлениям за месяц), и загрузка лимитов из
+ * заголовков — сколько процентов израсходовано и через сколько минут
+ * отпустит. Запускать из редактора, смотреть журнал. Токен в журнал не
+ * пишется: адрес запроса не логируем.
+ */
+function pplDiagMeta() {
+  const range = encodeURIComponent(JSON.stringify({
+    since: pplIsoDate_(new Date()).slice(0, 8) + '01', until: pplIsoDate_(new Date())
+  }));
+  pplAdAccounts_().forEach(function (acct) {
+    const resp = UrlFetchApp.fetch('https://graph.facebook.com/' + FB_API_VERSION + '/' + acct +
+      '/insights?level=ad&time_increment=1&fields=ad_id,spend&limit=500&time_range=' + range +
+      '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN')), { muteHttpExceptions: true });
+    const code = resp.getResponseCode();
+    let note = '';
+    if (code === 200) {
+      note = 'строк ' + ((JSON.parse(resp.getContentText()).data) || []).length;
+    } else {
+      try {
+        const e = JSON.parse(resp.getContentText()).error || {};
+        note = '(#' + e.code + (e.error_subcode ? '/' + e.error_subcode : '') + ') ' + e.message;
+      } catch (x) {
+        note = resp.getContentText().slice(0, 200);
+      }
+    }
+    const h = resp.getAllHeaders();
+    const hdr = function (name) {
+      const k = Object.keys(h).find(function (x) { return x.toLowerCase() === name; });
+      return k ? String(h[k]).slice(0, 400) : '—';
+    };
+    Logger.log(acct + ': HTTP ' + code + ' — ' + note);
+    Logger.log('  лимит кабинета (business use case): ' + hdr('x-business-use-case-usage'));
+    Logger.log('  лимит кабинета (ad account): ' + hdr('x-ad-account-usage'));
+    Logger.log('  лимит приложения: ' + hdr('x-app-usage'));
+  });
+}
+
+/**
  * Диагностика к отчёту «Сейчас активно»: показывает, сколько объявлений
  * Meta считает ACTIVE и сколько из них на самом деле уже отработали своё.
  * Запускать из редактора, смотреть журнал выполнения.
