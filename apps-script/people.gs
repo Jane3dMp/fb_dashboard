@@ -3054,11 +3054,31 @@ const PPL_RELINK_DAYS = 14;
 const PPL_RELINK_EVERY_MS = 55 * 60000;
 const PPL_RELINK_KEY = 'DIRECT_RELINK_AT';
 
-function pplRelinkOldLeads_() {
+/**
+ * Перепривязка сразу, не дожидаясь часа, — для ручного запуска из
+ * редактора: например, проверить только что заведённую менеджером
+ * сделку. Что сделала, видно в журнале выполнения.
+ */
+function pplRelinkDirectNow() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log('Сейчас идёт разметка или досыпка Direct — запустите через минуту');
+    return;
+  }
+  try {
+    pplRelinkOldLeads_(true);
+    Logger.log('Перепривязка Direct: проход закончен');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** force — не ждать часа с прошлого прохода (pplRelinkDirectNow). */
+function pplRelinkOldLeads_(force) {
   const props = PropertiesService.getScriptProperties();
   const now = Date.now();
   const last = Number(props.getProperty(PPL_RELINK_KEY) || 0);
-  if (now - last < PPL_RELINK_EVERY_MS) return;
+  if (!force && now - last < PPL_RELINK_EVERY_MS) return;
 
   const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
   if (!sh || sh.getLastRow() < 2) return;
