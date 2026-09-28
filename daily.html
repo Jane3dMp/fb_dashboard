@@ -230,6 +230,9 @@ async function loadData() {
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const dmy = iso => String(iso || '').split('-').reverse().join('.');
+/** Что ответила Meta на неудавшиеся запросы: бэкенд кладёт это в meta_errors. */
+const metaReply = d => (d.meta_errors || []).length
+  ? ' Meta ответила: ' + d.meta_errors.map(esc).join('; ') + '.' : '';
 /** «12 · 80%» — сколько и какая это доля от начатых переписок. */
 const part = (n, total) => !total ? '—' : !n ? '0'
   : fmtInt(n) + ' <small>' + Math.round(n / total * 100) + '%</small>';
@@ -344,6 +347,11 @@ function renderNote(d, cols) {
     parts.push('«Заблокировали» — после рекламы заблокировали аккаунт: объявление раздражает.');
   }
   parts.push('Валюта — валюта рекламного кабинета. Дни без открутки не показываются.');
+  // неполные данные — первым делом: иначе таблица читается как «весь расход»
+  if (d.partial) {
+    parts.unshift('⚠ Часть данных Meta не отдала даже после повтора — нажмите на период ещё раз.' +
+      metaReply(d).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  }
   note.textContent = parts.join(' ');
 }
 
@@ -352,7 +360,7 @@ function modeHead(title, d, extra) {
   const head = document.createElement('div');
   head.className = 'block';
   head.innerHTML = '<h2>' + title + ' · ' + d.since + ' — ' + d.until + '</h2>' +
-    (d.partial ? '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите на период ещё раз, чтобы перезапросить.</div>' : '') +
+    (d.partial ? '<div class="note">⚠ Часть данных Meta не отдала даже после повтора — нажмите на период ещё раз, чтобы перезапросить.' + metaReply(d) + '</div>' : '') +
     (extra ? '<div class="note">' + extra + '</div>' : '');
   return head;
 }

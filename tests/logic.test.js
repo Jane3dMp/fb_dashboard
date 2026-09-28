@@ -1008,6 +1008,38 @@ test('виды переписочных действий — без повтор
     ['onsite_conversion.messaging_block', 'onsite_conversion.messaging_first_reply']);
 });
 
+/* ---------- сбои Meta: повтор и объяснение ---------- */
+
+console.log('\nСбои Meta');
+
+const metaErrorOf_ = sandbox.pplMetaErrorOf_;
+const metaRetryable_ = sandbox.pplMetaRetryable_;
+const metaBody = (e) => JSON.stringify({ error: e });
+
+test('ошибка Meta из тела ответа: код, подкод, текст, временная ли', () => {
+  const e = metaErrorOf_(metaBody({ code: 2, message: 'Service temporarily unavailable', is_transient: true }));
+  assert.strictEqual(e.code, 2);
+  assert.strictEqual(e.transient, true);
+  assert.strictEqual(e.message, 'Service temporarily unavailable');
+  const limit = metaErrorOf_(metaBody({ code: 80004, error_subcode: 2446079,
+    message: 'There have been too many calls to this ad-account.' }));
+  assert.strictEqual(limit.subcode, 2446079);
+  assert.strictEqual(metaErrorOf_('<html>502 Bad Gateway</html>'), null, 'не JSON — не падаем');
+  assert.strictEqual(metaErrorOf_('{"data":[]}'), null);
+});
+
+test('повторяем сбои Meta, а лимиты и отказы по сути — нет', () => {
+  assert.strictEqual(metaRetryable_(500, metaErrorOf_(metaBody({ code: 1, message: 'An unknown error occurred' }))), true);
+  assert.strictEqual(metaRetryable_(503, null), true, 'HTML-страница 5xx — тоже сбой');
+  assert.strictEqual(metaRetryable_(400, metaErrorOf_(metaBody({ code: 2, is_transient: true }))), true);
+  assert.strictEqual(metaRetryable_(400, metaErrorOf_(metaBody({ code: 80004, is_transient: true }))), false,
+    'лимит кабинета: сразу ещё раз — только сильнее упрёмся');
+  assert.strictEqual(metaRetryable_(400, metaErrorOf_(metaBody({ code: 17, is_transient: true }))), false);
+  assert.strictEqual(metaRetryable_(500, metaErrorOf_(metaBody({ code: 4 }))), false);
+  assert.strictEqual(metaRetryable_(400, metaErrorOf_(metaBody({ code: 100, message: 'Invalid parameter' }))), false);
+  assert.strictEqual(metaRetryable_(400, metaErrorOf_(metaBody({ code: 190, message: 'token expired' }))), false);
+});
+
 /* ---------- выгорание креатива ---------- */
 
 console.log('\nВыгорание креатива');

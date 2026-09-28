@@ -167,6 +167,9 @@ const ratio = (a, b) => b ? a / b : null;
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const dmy = t => t ? String(t).slice(0, 10).split('-').reverse().join('.') : '';
+/** Что ответила Meta на неудавшиеся запросы: бэкенд кладёт это в meta_errors. */
+const metaReply = d => (d.meta_errors || []).length
+  ? ' Meta ответила: ' + d.meta_errors.map(esc).join('; ') + '.' : '';
 /** «1 группа / 2 группы / 5 групп» — иначе шапка читается как машинный лог. */
 const plural = (n, forms) => {
   const a = Math.abs(n) % 100, b = a % 10;
@@ -261,7 +264,7 @@ function render(d) {
   if (d.partial) {
     const warn = document.createElement('div');
     warn.className = 'block';
-    warn.innerHTML = '<div class="note">⚠ Часть данных Meta не отдала с первого раза — нажмите «Обновить», чтобы перезапросить.</div>';
+    warn.innerHTML = '<div class="note">⚠ Часть данных Meta не отдала даже после повтора — нажмите «Обновить», чтобы перезапросить.' + metaReply(d) + '</div>';
     blocks.appendChild(warn);
   }
   if (d.mixed_currency) {

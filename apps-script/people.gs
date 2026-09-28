@@ -298,7 +298,7 @@ function pplFetchAdSpend_(since, until) {
       '?level=ad&fields=ad_id,ad_name,campaign_name,spend,clicks,impressions' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=500&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const resp = pplMetaFetch_(url);
     if (resp.getResponseCode() !== 200) return; // кабинет мог отвалиться по правам — не роняем всё
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       spend[r.ad_id] = {
@@ -329,7 +329,7 @@ function pplFetchSpendByPlatform_(since, until) {
       '?level=account&fields=spend,account_currency&breakdowns=publisher_platform' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=100&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const resp = pplMetaFetch_(url);
     if (resp.getResponseCode() !== 200) return;
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       const v = Number(r.spend || 0);
@@ -397,7 +397,7 @@ function pplIgProfileMap_(adIds) {
       // instagram_user_id, в старых — в instagram_actor_id
       '&fields=' + encodeURIComponent('creative{instagram_actor_id,instagram_user_id}') +
       '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const resp = pplMetaFetch_(url);
     if (resp.getResponseCode() !== 200) continue;
     const body = JSON.parse(resp.getContentText());
     const toCache = {};
@@ -433,7 +433,7 @@ function pplIgProfileMap_(adIds) {
         '?ids=' + encodeURIComponent(missingNames.join(',')) +
         '&fields=' + encodeURIComponent('username,name') +
         '&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      const resp = pplMetaFetch_(url);
       if (resp.getResponseCode() === 200) {
         const body = JSON.parse(resp.getContentText());
         const toCache = {};
@@ -1529,6 +1529,78 @@ function pplDumpContactFields() {
 
 /* ============ 3b. Общие хелперы Meta Ads ============ */
 
+/*
+ * Повтор и объяснение сбоев Meta (с 28.09.2026). 28.09 в 14:44 Meta один
+ * раз не ответила по основному кабинету, и «Дни» показали только CODDY с
+ * невнятной плашкой; через полчаса тот же запрос прошёл. Поэтому временную
+ * ошибку (5xx, is_transient, коды 1 и 2) повторяем до двух раз с паузой, а
+ * что Meta ответила в итоге, запоминаем: отчёт кладёт это в meta_errors, и
+ * страница пишет в плашке не «что-то не так», а ответ Meta. Лимиты
+ * (#4, #17, #80004…) не повторяем: сразу ещё раз — только сильнее упрёмся.
+ */
+const PPL_META_RETRY_MS = [1500, 4000];
+/** Ответы Meta, которые не удалось получить за это выполнение скрипта. */
+const PPL_META_ERRORS = [];
+
+/** Ошибка Meta из тела ответа: { code, subcode, message, transient } или null. Чистая функция. */
+function pplMetaErrorOf_(text) {
+  try {
+    const e = JSON.parse(text).error;
+    if (!e) return null;
+    return {
+      code: Number(e.code || 0),
+      subcode: Number(e.error_subcode || 0),
+      message: String(e.error_user_msg || e.message || '').slice(0, 160),
+      transient: e.is_transient === true
+    };
+  } catch (x) {
+    return null;
+  }
+}
+
+/** Коды лимитов Meta: приложение, пользователь, страница, вызовы; 80000–80014 — кабинет. */
+const PPL_META_LIMIT_CODES = [4, 17, 32, 613];
+
+/** Стоит ли повторить запрос: сбой Meta, а не отказ по сути или лимит. Чистая функция. */
+function pplMetaRetryable_(httpCode, err) {
+  // лимит повтором не лечится, даже если Meta пометила его временным
+  if (err && (PPL_META_LIMIT_CODES.indexOf(err.code) !== -1 || (err.code >= 80000 && err.code <= 80014))) {
+    return false;
+  }
+  if (httpCode >= 500) return true;
+  return !!err && (err.transient || err.code === 1 || err.code === 2);
+}
+
+/** Запоминает, что Meta ответила на неудавшийся запрос (кабинет — из адреса). */
+function pplNoteMetaError_(url, resp) {
+  const acct = (String(url).match(/act_\d+/) || ['Meta'])[0];
+  const err = pplMetaErrorOf_(resp.getContentText());
+  const text = acct + ': ' + (err
+    ? '(#' + err.code + (err.subcode ? '/' + err.subcode : '') + ') ' + err.message
+    : 'HTTP ' + resp.getResponseCode());
+  if (PPL_META_ERRORS.indexOf(text) === -1) PPL_META_ERRORS.push(text);
+}
+
+/**
+ * GET к Meta с повтором временных сбоев. Возвращает последний ответ;
+ * не 200 — уже записан в PPL_META_ERRORS.
+ */
+function pplMetaFetch_(url) {
+  let resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  for (let i = 0; i < PPL_META_RETRY_MS.length && resp.getResponseCode() !== 200; i++) {
+    if (!pplMetaRetryable_(resp.getResponseCode(), pplMetaErrorOf_(resp.getContentText()))) break;
+    Utilities.sleep(PPL_META_RETRY_MS[i]);
+    resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  }
+  if (resp.getResponseCode() !== 200) pplNoteMetaError_(url, resp);
+  return resp;
+}
+
+/** Что отчёт отдаёт странице про сбои Meta: не больше трёх разных ответов. */
+function pplMetaErrorsOut_() {
+  return PPL_META_ERRORS.slice(0, 3);
+}
+
 /**
  * GET к Graph API. Принимает и короткий путь («act_1/insights?...»), и
  * готовый адрес из paging.next — в нём токен уже вшит, второй раз его
@@ -1541,7 +1613,7 @@ function pplGraph_(pathOrUrl) {
     : 'https://graph.facebook.com/' + FB_API_VERSION + '/' + pathOrUrl +
       (pathOrUrl.indexOf('?') === -1 ? '?' : '&') +
       'access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-  const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const resp = pplMetaFetch_(url);
   if (resp.getResponseCode() !== 200) return null;
   return JSON.parse(resp.getContentText());
 }
@@ -1654,13 +1726,19 @@ function pplMsgTypes_(rows) {
 function pplGraphAll_(paths) {
   if (!paths.length) return [];
   const token = encodeURIComponent(pplProp_('FB_TOKEN'));
-  return UrlFetchApp.fetchAll(paths.map(function (p) {
-    return {
-      url: 'https://graph.facebook.com/' + FB_API_VERSION + '/' + p +
-        (p.indexOf('?') === -1 ? '?' : '&') + 'access_token=' + token,
-      muteHttpExceptions: true
-    };
-  })).map(function (resp) {
+  const urls = paths.map(function (p) {
+    return 'https://graph.facebook.com/' + FB_API_VERSION + '/' + p +
+      (p.indexOf('?') === -1 ? '?' : '&') + 'access_token=' + token;
+  });
+  return UrlFetchApp.fetchAll(urls.map(function (u) {
+    return { url: u, muteHttpExceptions: true };
+  })).map(function (resp, i) {
+    // не прошедшие разом — по одному, с повтором временных сбоев
+    if (resp.getResponseCode() !== 200) {
+      resp = pplMetaRetryable_(resp.getResponseCode(), pplMetaErrorOf_(resp.getContentText()))
+        ? pplMetaFetch_(urls[i])
+        : (pplNoteMetaError_(urls[i], resp), resp);
+    }
     return resp.getResponseCode() === 200 ? JSON.parse(resp.getContentText()) : null;
   });
 }
@@ -1974,7 +2052,7 @@ function pplBuildDaily(params) {
       '&fields=spend,impressions,clicks,inline_link_clicks,actions,account_currency' +
       '&time_range=' + encodeURIComponent(JSON.stringify({ since: since, until: until })) +
       '&limit=200&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const resp = pplMetaFetch_(url);
     if (resp.getResponseCode() !== 200) { partial = true; return; }
     ((JSON.parse(resp.getContentText()).data) || []).forEach(function (r) {
       const d = r.date_start;
@@ -2001,7 +2079,7 @@ function pplBuildDaily(params) {
       '&limit=500&access_token=' + encodeURIComponent(pplProp_('FB_TOKEN'));
     // страниц может быть несколько: объявления × дни
     for (let page = 0; page < 6 && url; page++) {
-      const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      const resp = pplMetaFetch_(url);
       if (resp.getResponseCode() !== 200) { partial = true; break; }
       const body = JSON.parse(resp.getContentText());
       (body.data || []).forEach(function (r) { perAd.push(r); });
@@ -2134,6 +2212,7 @@ function pplBuildDaily(params) {
     by_campaign: campaigns,
     msg_types: pplMsgTypes_(perAd),
     reach_missing: reachMissing,
+    meta_errors: pplMetaErrorsOut_(),
     partial: partial
   };
   try {
@@ -2388,6 +2467,7 @@ function pplBuildActive(params) {
       burnout_hot: burnt.hot,
       burnout_warn: burnt.warn
     },
+    meta_errors: pplMetaErrorsOut_(),
     partial: partial
   };
 
@@ -2506,6 +2586,7 @@ function pplBuildAudience(params) {
     profiles: profiles,
     tz: accts.map(function (a) { return tz[a] || null; }),
     msg_types: pplMsgTypes_(rowsByCut[3]),
+    meta_errors: pplMetaErrorsOut_(),
     partial: partial
   };
   try {

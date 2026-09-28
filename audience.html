@@ -246,6 +246,9 @@ const pct = n => n == null ? '—' : (n * 100).toLocaleString('ru-RU', { maximum
 const ratio = (a, b) => b ? a / b : null;
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** Что ответила Meta на неудавшиеся запросы: бэкенд кладёт это в meta_errors. */
+const metaReply = d => (d.meta_errors || []).length
+  ? ' Meta ответила: ' + d.meta_errors.map(esc).join('; ') + '.' : '';
 
 // Номер последнего запроса. Период переключают, не дождавшись ответа, и
 // опоздавший ответ прошлого периода перерисовывал страницу поверх нового:
@@ -475,7 +478,7 @@ function render(d) {
   document.getElementById('cards').innerHTML = cards.join('');
 
   const warns = [];
-  if (d.partial) warns.push('Часть данных Meta не отдала с первого раза — нажмите «Обновить».');
+  if (d.partial) warns.push('Часть данных Meta не отдала даже после повтора — нажмите «Обновить».' + metaReply(d));
   if (d.mixed_currency) warns.push('Кабинеты ведутся в разных валютах — суммы складывать нельзя.');
   document.getElementById('warn').innerHTML = warns.length
     ? '<div class="block"><div class="note warn">⚠ ' + warns.join('<br>⚠ ') + '</div></div>' : '';
