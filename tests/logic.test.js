@@ -1374,6 +1374,64 @@ test('в таблицу: с курсом — всегда, без курса —
   assert.strictEqual(out.map(r => r.contact_id + ':' + (r.course || '-')).join(' '), 'a:Minecraft b:- e:Глина');
 });
 
+console.log('\nПерепривязка: сделку завели после переписки');
+
+const pickRelink_ = sandbox.pplPickRelinkLead_;
+const relinkPlan_ = sandbox.pplRelinkPlan_;
+// живой случай 27–28.09.2026: вопрос про математику лёг в летнюю
+// проигранную сделку «Интенсивов», утром менеджер завёл новую
+const MATH_TS = '2026-09-27T17:11:28Z';
+const OLD_LEAD = { id: 37246317, created_at: unix('2026-05-31T19:23:42Z'), status_id: 143 };
+const NEW_LEAD = { id: 38889885, created_at: unix('2026-09-28T07:39:35Z'), status_id: 81738154, pipeline_id: 7407214 };
+
+test('перепривязка: самая ранняя сделка того же контакта после сообщения', () => {
+  const later = { id: 5, created_at: unix('2026-10-02T10:00:00Z') };
+  const tooLate = { id: 6, created_at: unix('2026-10-20T10:00:00Z') };
+  const before = { id: 7, created_at: unix('2026-09-20T10:00:00Z') };
+  assert.strictEqual(pickRelink_(MATH_TS, OLD_LEAD.id, [OLD_LEAD, later, NEW_LEAD, tooLate, before]).id, NEW_LEAD.id);
+  assert.strictEqual(pickRelink_(MATH_TS, OLD_LEAD.id, [OLD_LEAD, before]), null, 'старые сделки не подходят');
+  assert.strictEqual(pickRelink_(MATH_TS, OLD_LEAD.id, [tooLate]), null, 'позже двух недель — уже не ответ на это обращение');
+});
+
+test('план: сделку забирает последнее обращение, одна сделка — одной строке, занятые не трогаем', () => {
+  const rows = [
+    { i: 3, leadId: OLD_LEAD.id, msg: { ts: '2026-09-18T09:00:00Z', course: 'Математика' } },
+    { i: 9, leadId: OLD_LEAD.id, msg: { ts: MATH_TS, course: 'Математика' } }
+  ];
+  const plan = relinkPlan_(rows, { [OLD_LEAD.id]: [40896097] }, { 40896097: [OLD_LEAD.id, NEW_LEAD.id] },
+    { [OLD_LEAD.id]: OLD_LEAD, [NEW_LEAD.id]: NEW_LEAD }, {});
+  assert.strictEqual(plan.length, 1);
+  assert.strictEqual(plan[0].i, 9, 'новую сделку менеджер заводил на вопрос 27.09, а не на тот, что неделей раньше');
+  assert.strictEqual(plan[0].lead.id, NEW_LEAD.id);
+  assert.strictEqual(plan[0].from, OLD_LEAD.id);
+  const taken = relinkPlan_(rows, { [OLD_LEAD.id]: [40896097] }, { 40896097: [OLD_LEAD.id, NEW_LEAD.id] },
+    { [OLD_LEAD.id]: OLD_LEAD, [NEW_LEAD.id]: NEW_LEAD }, { [NEW_LEAD.id]: true });
+  assert.strictEqual(taken.length, 0, 'сделка уже своя у другой строки — не отбираем');
+});
+
+test('в перепривязанную сделку курс пишется, как в свежую', () => {
+  const p = directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, NEW_LEAD, true);
+  assert.strictEqual(p.status, 'ok');
+  assert.strictEqual(p.patch.id, NEW_LEAD.id);
+  assert.strictEqual(p.patch.custom_fields_values[0].values[0].value, 'Математика');
+  assert.strictEqual(JSON.stringify(p.patch.tags_to_add), JSON.stringify([{ name: 'курс: Математика' }]));
+  // без флага та же сделка — «старая»: заведена через 14 часов, вне окна
+  assert.strictEqual(directPatch_({ ts: MATH_TS, course: 'Математика', ad_id: '' }, NEW_LEAD).status, 'old_lead');
+});
+
+test('перепривязанная строка — новая заявка, а не «уже был в amoCRM», и видна без курса', () => {
+  const r = directRow_({ ts: MATH_TS, bot: 'ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ', name: 'A', course: 'Математика', status: 'relinked' },
+    NEW_LEAD, stagesMap);
+  assert.strictEqual(r.client, false);
+  assert.strictEqual(r.relinked, true);
+  assert.strictEqual(r.pipeline, 'Регулярные занятия');
+  const out = sandbox.pplDirectPick_([
+    { contact_id: 'x', course: '', status: 'relinked' },
+    { contact_id: 'y', course: '', status: 'old_lead' }
+  ]);
+  assert.strictEqual(out.map(r => r.contact_id).join(','), 'x');
+});
+
 test('короткие имена аккаунтов', () => {
   assert.strictEqual(shortBot_('CODDY®🚀 ШКОЛА ПРОГРАММИРОВАНИЯ  И ДИЗАЙНА 🚀 МОГИЛЁВ'), 'CODDY');
   assert.strictEqual(shortBot_('ДЕТСКИЙ КЛУБ В МОГИЛЕВЕ'), 'Детский клуб');

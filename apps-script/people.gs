@@ -2774,6 +2774,9 @@ function pplTagDirectCourses() {
   if (!lock.tryLock(5000)) return;
   try {
     pplTagDirectRows_();
+    // сбой перепривязки не должен ронять разметку: упавший триггер
+    // Google шлёт владелице письмом каждые 10 минут
+    try { pplRelinkOldLeads_(); } catch (e) { Logger.log('Перепривязка Direct: ' + e); }
   } finally {
     lock.releaseLock();
   }
@@ -2929,12 +2932,14 @@ function pplPickChatEventLead_(tsIso, events) {
  * BEFORE/AFTER): в старой сделке клиента поле описывает прошлую заявку, и
  * курс приписал бы ей чужую выручку. Заполненное не трогаем. Тег «курс: …»
  * ставится в любую найденную сделку — менеджеру видно, о чём спросили.
+ * asNew — сделку менеджер завёл на эту переписку позже, вручную
+ * (перепривязка, pplRelinkOldLeads_): она новая, хоть и вне окна.
  * Чистая функция: { patch: объект для PATCH или null, status }.
  */
-function pplDirectPatch_(msg, lead) {
+function pplDirectPatch_(msg, lead, asNew) {
   const t = new Date(msg.ts).getTime();
   const created = Number(lead.created_at || 0) * 1000;
-  const fresh = created >= t - PPL_DIRECT_BEFORE_MS && created <= t + PPL_DIRECT_AFTER_MS;
+  const fresh = !!asNew || (created >= t - PPL_DIRECT_BEFORE_MS && created <= t + PPL_DIRECT_AFTER_MS);
   // без курса и рекламы писать нечего — запоминаем только, новая ли переписка
   if (!msg.course && !msg.ad_id) return { patch: null, status: fresh ? 'no_course' : 'old_lead' };
   const fields = [];
@@ -3011,6 +3016,170 @@ function pplSetupDirectCourseTrigger() {
 }
 
 /*
+ * Перепривязка (с 28.09.2026). Бывает, что amoCRM подшивает новую
+ * переписку в старую сделку клиента — даже закрытую (строка old_lead), и
+ * менеджер заводит на обращение новую сделку руками. 27.09 так вопрос про
+ * математику лёг в летнюю проигранную сделку «Интенсивов», а утром
+ * менеджер завёл «Регулярные занятия». Без перепривязки строка навсегда
+ * показывала бы летний «Отказ», а оплаты новой сделки не засчитывались
+ * бы этому обращению. Поэтому раз в час смотрим контакты свежих old_lead:
+ * появилась у того же контакта сделка после сообщения — строка
+ * переключается на неё (status relinked), а в сделку ложатся курс и тег,
+ * как в свежую. Правило amoCRM «новая сделка, если у клиента нет
+ * активных» (сменили 28.09) большую часть таких случаев закрывает само;
+ * это — для сделок, заведённых вручную.
+ */
+
+/** Сколько дней после сообщения ждём сделку, заведённую вручную. */
+const PPL_RELINK_DAYS = 14;
+/** Не чаще раза в час: проход обходит контакты всех свежих old_lead. */
+const PPL_RELINK_EVERY_MS = 55 * 60000;
+const PPL_RELINK_KEY = 'DIRECT_RELINK_AT';
+
+function pplRelinkOldLeads_() {
+  const props = PropertiesService.getScriptProperties();
+  const now = Date.now();
+  const last = Number(props.getProperty(PPL_RELINK_KEY) || 0);
+  if (now - last < PPL_RELINK_EVERY_MS) return;
+
+  const sh = SpreadsheetApp.openById(pplProp_('SHEET_ID')).getSheetByName(PPL_DIRECT_SHEET);
+  if (!sh || sh.getLastRow() < 2) return;
+  const values = sh.getDataRange().getValues();
+  const col = {};
+  values[0].map(String).forEach(function (h, i) { col[h] = i; });
+
+  // Первый проход — по всем old_lead: досыпка истории принесла их с начала
+  // сентября, и часть уже дождалась своей новой сделки. Дальше — только по
+  // тем, чьё окно ещё не закрылось (плюс сутки на последнюю проверку).
+  const horizon = last ? now - (PPL_RELINK_DAYS + 1) * 86400000 : 0;
+  const rows = [];
+  const used = {};
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    const st = String(r[col.status] || '');
+    const leadId = Number(r[col.lead_id] || 0);
+    // сделки, у которых уже есть своя строка, чужой строке не отдаём
+    if (leadId && st !== 'old_lead') used[leadId] = true;
+    if (st !== 'old_lead' || !leadId) continue;
+    const t = new Date(r[col.ts]).getTime();
+    if (!t || t < horizon) continue;
+    rows.push({
+      i: i, leadId: leadId,
+      msg: {
+        ts: new Date(t).toISOString(),
+        course: String(r[col.course] || ''),
+        ad_id: col.ad_id === undefined ? '' : String(r[col.ad_id] || '')
+      }
+    });
+  }
+  if (!rows.length) { props.setProperty(PPL_RELINK_KEY, String(now)); return; }
+
+  const base = 'https://' + pplProp_('AMO_SUBDOMAIN') + '.amocrm.ru/api/v4';
+  const auth = { headers: { Authorization: 'Bearer ' + pplProp_('AMO_TOKEN') }, muteHttpExceptions: true };
+  const uniq = function (list) {
+    const seen = {};
+    return list.filter(function (x) { return !seen[x] && (seen[x] = true); });
+  };
+
+  // три пачки запросов на всё: контакты старых сделок → их сделки → сами сделки
+  const contactsByLead = {};
+  pplFetchLeads_(base, auth, uniq(rows.map(function (r) { return r.leadId; })), 'contacts')
+    .forEach(function (l) {
+      contactsByLead[l.id] = (((l._embedded || {}).contacts) || []).map(function (c) { return c.id; });
+    });
+  const contactIds = [];
+  Object.keys(contactsByLead).forEach(function (k) { contactsByLead[k].forEach(function (c) { contactIds.push(c); }); });
+  const leadsByContact = pplFetchContactLeadIds_(base, auth, uniq(contactIds));
+  const leadIds = [];
+  Object.keys(leadsByContact).forEach(function (k) { leadsByContact[k].forEach(function (id) { leadIds.push(id); }); });
+  const leadById = {};
+  pplFetchLeads_(base, auth, uniq(leadIds)).forEach(function (l) { leadById[l.id] = l; });
+
+  pplRelinkPlan_(rows, contactsByLead, leadsByContact, leadById, used).forEach(function (p) {
+    const plan = pplDirectPatch_(p.msg, p.lead, true);
+    if (plan.patch) {
+      const resp = UrlFetchApp.fetch(base + '/leads', {
+        method: 'patch',
+        contentType: 'application/json',
+        payload: JSON.stringify([plan.patch]),
+        headers: auth.headers,
+        muteHttpExceptions: true
+      });
+      // не записалось — строку не трогаем, через час попробуем снова
+      if (resp.getResponseCode() !== 200) {
+        Logger.log('Перепривязка Direct, строка ' + (p.i + 1) + ': PATCH HTTP ' + resp.getResponseCode());
+        return;
+      }
+    }
+    sh.getRange(p.i + 1, col.status + 1, 1, 2).setValues([['relinked', p.lead.id]]);
+    Logger.log('Перепривязка Direct, строка ' + (p.i + 1) + ': сделка ' + p.from + ' → ' + p.lead.id);
+  });
+  props.setProperty(PPL_RELINK_KEY, String(now));
+}
+
+/** Сделки контактов: { id контакта: [id сделок] }, пачками по 50. */
+function pplFetchContactLeadIds_(base, auth, ids) {
+  const out = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const q = ids.slice(i, i + 50).map(function (id) { return 'filter[id][]=' + id; }).join('&');
+    const resp = UrlFetchApp.fetch(base + '/contacts?limit=50&with=leads&' + q, auth);
+    if (resp.getResponseCode() === 204) continue;
+    if (resp.getResponseCode() !== 200) throw new Error('amo contacts HTTP ' + resp.getResponseCode());
+    (((JSON.parse(resp.getContentText())._embedded) || {}).contacts || []).forEach(function (c) {
+      out[c.id] = (((c._embedded || {}).leads) || []).map(function (l) { return l.id; });
+    });
+  }
+  return out;
+}
+
+/**
+ * Какие строки на какие сделки перепривязать. rows — строки old_lead
+ * ({ i, leadId, msg }); contactsByLead — контакты старой сделки строки;
+ * leadsByContact — id сделок контакта; leadById — сами сделки; used —
+ * сделки, у которых уже есть своя строка. Идём от свежих сообщений к
+ * старым: менеджер заводит сделку на последнее обращение, а не на то,
+ * что было неделю назад. Одна сделка — одной строке. Чистая функция:
+ * [{ i, lead, msg, from }].
+ */
+function pplRelinkPlan_(rows, contactsByLead, leadsByContact, leadById, used) {
+  const taken = {};
+  Object.keys(used || {}).forEach(function (k) { taken[k] = true; });
+  return rows.slice().sort(function (a, b) {
+    return String(b.msg.ts).localeCompare(String(a.msg.ts));
+  }).map(function (row) {
+    const cands = [];
+    (contactsByLead[row.leadId] || []).forEach(function (cid) {
+      (leadsByContact[cid] || []).forEach(function (id) {
+        if (leadById[id] && !taken[id]) cands.push(leadById[id]);
+      });
+    });
+    const lead = pplPickRelinkLead_(row.msg.ts, row.leadId, cands);
+    if (!lead) return null;
+    taken[lead.id] = true;
+    return { i: row.i, lead: lead, msg: row.msg, from: row.leadId };
+  }).filter(Boolean);
+}
+
+/**
+ * Сделка, заведённая на переписку вручную: у того же контакта, создана
+ * после сообщения (с запасом BEFORE — менеджер мог завести, пока человек
+ * дописывал) и не позже PPL_RELINK_DAYS. Самая ранняя такая и есть ответ
+ * на обращение. Чистая функция: сделка или null.
+ */
+function pplPickRelinkLead_(tsIso, oldLeadId, leads) {
+  const t = new Date(tsIso).getTime();
+  if (!t) return null;
+  let best = null;
+  (leads || []).forEach(function (l) {
+    if (Number(l.id) === Number(oldLeadId)) return;
+    const created = Number(l.created_at || 0) * 1000;
+    if (created < t - PPL_DIRECT_BEFORE_MS || created > t + PPL_RELINK_DAYS * 86400000) return;
+    if (!best || created < Number(best.created_at) * 1000) best = l;
+  });
+  return best;
+}
+
+/*
  * Кто написал в Direct — таблица страницы «Путь клиента»: по строке на
  * человека из листа «Курсы из Direct» — когда, в какой аккаунт, что написал
  * и чем кончилось в amoCRM (этап, причина отказа). Альфу и деньги добавляет
@@ -3069,17 +3238,18 @@ function pplDirectRows_(since, until) {
 /**
  * Какие строки листа показывать. С курсом — всегда. Без курса — только
  * новую переписку (задача нашла сделку, заведённую на неё: статус
- * no_course) и только если у того же человека за период нет строки с
- * курсом, иначе он попал бы в таблицу дважды. Текущие разговоры старых
- * контактов без курса — не обращения: их не показываем и за их сделками
- * в amoCRM не ходим. Чистая функция.
+ * no_course, или менеджер завёл её позже: relinked) и только если у того
+ * же человека за период нет строки с курсом, иначе он попал бы в таблицу
+ * дважды. Текущие разговоры старых контактов без курса — не обращения:
+ * их не показываем и за их сделками в amoCRM не ходим. Чистая функция.
  */
 function pplDirectPick_(rows) {
   const withCourse = {};
   rows.forEach(function (r) { if (String(r.course || '')) withCourse[String(r.contact_id)] = true; });
   return rows.filter(function (r) {
     if (String(r.course || '')) return true;
-    return String(r.status || '') === 'no_course' && !withCourse[String(r.contact_id)];
+    const st = String(r.status || '');
+    return (st === 'no_course' || st === 'relinked') && !withCourse[String(r.contact_id)];
   });
 }
 
@@ -3112,7 +3282,11 @@ function pplDirectRow_(r, lead, stages) {
   out.stage = pl.statuses[lead.status_id] || '';
   out.outcome = lead.status_id === AMO_WON ? 'won' : lead.status_id === AMO_LOST ? 'lost' : 'open';
   out.reason = (((((lead._embedded || {}).loss_reason) || [])[0]) || {}).name || '';
-  out.client = !(created >= ts.getTime() - PPL_DIRECT_BEFORE_MS && created <= ts.getTime() + PPL_DIRECT_AFTER_MS);
+  // сделку, заведённую позже вручную (перепривязка), считаем новой заявкой:
+  // создана она не в окне сообщения, но заведена именно на это обращение
+  out.relinked = st === 'relinked';
+  out.client = !out.relinked &&
+    !(created >= ts.getTime() - PPL_DIRECT_BEFORE_MS && created <= ts.getTime() + PPL_DIRECT_AFTER_MS);
   return out;
 }
 
